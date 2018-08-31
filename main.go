@@ -47,9 +47,7 @@ var (
 	journal     = flag.String("j", "", "Existing journal to learn from.")
 	output      = flag.String("o", "out.ldg", "Journal file to write to.")
 	csvFile     = flag.String("csv", "", "File path of CSV file containing new transactions.")
-	account     = flag.String("a", "", "Name of bank account transactions belong to.")
 	currency    = flag.String("c", "", "Set currency if any.")
-	ignore      = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
 	dateFormat  = flag.String("d", "1/2/2006", "Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
 	skip        = flag.Int("s", 1, "Number of header lines in CSV to skip")
 	configDir   = flag.String("conf", homeDir()+"/.into-ledger", "Config directory to store various into-ledger configs in.")
@@ -253,9 +251,6 @@ func (p *parser) generateClasses() {
 	for _, a := range p.accounts {
 		tomap[a] = true
 	}
-
-	// remove this account as it would appear in many relevant transactions
-	delete(tomap, *account)
 
 	for to := range tomap {
 		p.classes = append(p.classes, bayesian.Class(to))
@@ -941,23 +936,6 @@ func main() {
 	singleCharMode()
 
 	checkf(os.MkdirAll(*configDir, 0755), "Unable to create directory: %v", *configDir)
-	if len(*account) == 0 {
-		oerr("Please specify the account transactions are coming from")
-		return
-	}
-
-	configPath := path.Join(*configDir, "config.yaml")
-	data, err := ioutil.ReadFile(configPath)
-	if err == nil {
-		var c configs
-		checkf(yaml.Unmarshal(data, &c), "Unable to unmarshal yaml config at %v", configPath)
-		if ac, has := c.Accounts[*account]; has {
-			fmt.Printf("Using flags from config: %+v\n", ac)
-			for k, v := range ac {
-				flag.Set(k, v)
-			}
-		}
-	}
 
 	{
 		f, err := os.Open("mint2ledger.yaml")
@@ -978,7 +956,7 @@ func main() {
 		oerr("Please specify the input ledger journal file")
 		return
 	}
-	data, err = ioutil.ReadFile(*journal)
+	data, err := ioutil.ReadFile(*journal)
 	checkf(err, "Unable to read file: %v", *journal)
 	alldata := includeAll(path.Dir(*journal), data)
 
