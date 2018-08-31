@@ -50,12 +50,12 @@ var (
 	account     = flag.String("a", "", "Name of bank account transactions belong to.")
 	currency    = flag.String("c", "", "Set currency if any.")
 	ignore      = flag.String("ic", "", "Comma separated list of columns to ignore in CSV.")
-	dateFormat  = flag.String("d", "01/02/2006", "Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
-	skip        = flag.Int("s", 0, "Number of header lines in CSV to skip")
+	dateFormat  = flag.String("d", "1/2/2006", "Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
+	skip        = flag.Int("s", 1, "Number of header lines in CSV to skip")
 	configDir   = flag.String("conf", homeDir()+"/.into-ledger", "Config directory to store various into-ledger configs in.")
 	shortcuts   = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
 	inverseSign = flag.Bool("inverseSign", false, "Inverse sign of transaction amounts in CSV.")
-	reverseCSV  = flag.Bool("reverseCSV", false, "Reverse order of transactions in CSV")
+	reverseCSV  = flag.Bool("reverseCSV", true, "Reverse order of transactions in CSV")
 	allowDups   = flag.Bool("allowDups", false, "Don't filter out duplicate transactions")
 	tfidf       = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian")
 
@@ -71,6 +71,8 @@ var (
 	descLength = 40
 	catLength  = 20
 	short      *keys.Shortcuts
+
+	accMap accountsConfig
 )
 
 type accountFlags struct {
@@ -81,16 +83,65 @@ type configs struct {
 	Accounts map[string]map[string]string // account and the corresponding config.
 }
 
+type accountsConfig struct {
+	Rename map[string]string `yaml:"Rename"`
+}
+
 type txn struct {
-	Date               time.Time
-	Desc               string
-	To                 string
-	From               string
-	Cur                float64
-	CurName            string
-	Key                []byte
-	skipClassification bool
-	Done               bool
+	Date         time.Time
+	BankDesc     string
+	MintDesc     string
+	MintCategory string
+	To           string
+	From         string
+	Amount       float64
+	Currency     string
+	Key          []byte
+	Done         bool
+}
+
+func (t *txn) getKnownAccount() string {
+	if t.Amount >= 0 {
+		return t.To
+	}
+	return t.From
+}
+
+func (t *txn) getPairAccount() string {
+	if t.Amount >= 0 {
+		return t.From
+	}
+	return t.To
+}
+
+func (t *txn) getKnownAccount2() (prefix, pair string) {
+	if t.Amount >= 0 {
+		return "[TO]", t.To
+	}
+	return "[FROM]", t.From
+}
+
+func (t *txn) getPairAccount2() (prefix, pair string) {
+	if t.Amount >= 0 {
+		return "[FROM]", t.From
+	}
+	return "[TO]", t.To
+}
+
+func (t *txn) setKnownAccount(acc string) {
+	if t.Amount >= 0 {
+		t.To = acc
+	} else {
+		t.From = acc
+	}
+}
+
+func (t *txn) setPairAccount(pair string) {
+	if t.Amount >= 0 {
+		t.From = pair
+	} else {
+		t.To = pair
+	}
 }
 
 type byTime []txn
@@ -153,17 +204,23 @@ func (p *parser) parseTransactions() {
 		t = txn{}
 		t.Date, err = time.Parse(stamp, cols[0])
 		checkf(err, "Unable to parse time: %v", cols[0])
-		t.Desc = strings.Trim(cols[2], " \n\t")
+		t.BankDesc = strings.Trim(cols[2], " \n\t")
 
 		t.To = cols[3]
 		assertf(len(t.To) > 0, "Expected TO, found empty.")
-		if strings.HasPrefix(t.To, "Equity:") {
-			// Don't pick up Equity.
-			t.skipClassification = true
-		}
-		t.CurName = cols[4]
-		t.Cur, err = strconv.ParseFloat(cols[5], 64)
+
+		t.Currency = cols[4]
+		t.Amount, err = strconv.ParseFloat(cols[5], 64)
 		checkf(err, "Unable to parse amount.")
+
+		comment := strings.Split(cols[7], ";")
+		if len(comment) > 0 {
+			t.MintDesc = normalizeWhitespace(comment[0])
+		}
+		if len(comment) > 1 {
+			t.MintCategory = normalizeWhitespace(comment[1])
+		}
+
 		p.txns = append(p.txns, t)
 
 		assignForAccount(t.To)
@@ -191,9 +248,6 @@ func (p *parser) generateClasses() {
 	p.classes = make([]bayesian.Class, 0, 10)
 	tomap := make(map[string]bool)
 	for _, t := range p.txns {
-		if t.skipClassification {
-			continue
-		}
 		tomap[t.To] = true
 	}
 	for _, a := range p.accounts {
@@ -250,34 +304,58 @@ func (t *txn) isFromJournal() bool {
 	return t.Key == nil
 }
 
+func normalizeWhitespace(s string) string {
+	s = trimWhitespace.ReplaceAllString(s, "")
+	s = dedupWhitespace.ReplaceAllString(s, " ")
+	return s
+}
+
 func (t *txn) getTerms() []string {
-	desc := strings.ToUpper(t.Desc)
-	desc = trimWhitespace.ReplaceAllString(desc, "")
-	desc = dedupWhitespace.ReplaceAllString(desc, " ")
+	desc := strings.ToUpper(t.BankDesc)
+	desc = normalizeWhitespace(desc)
 	terms := strings.Split(desc, " ")
 
-	terms = append(terms, "FullDesc: "+desc)
+	terms = append(terms, "BankDesc: "+desc)
 
-	var cur float64
+	desc = strings.ToUpper(t.MintDesc)
+	desc = normalizeWhitespace(desc)
+	if desc != "" {
+		moreTerms := strings.Split(desc, " ")
+		terms = append(terms, moreTerms...)
+		terms = append(terms, "MintDesc: "+desc)
+	}
+
+	cat := strings.ToUpper(t.MintCategory)
+	cat = normalizeWhitespace(cat)
+	if cat != "" {
+		moreTerms := strings.Split(cat, " ")
+		terms = append(terms, moreTerms...)
+		terms = append(terms, "MintCategory: "+cat)
+	}
+
+	var amt float64
 	if t.isFromJournal() {
-		cur = t.Cur
+		amt = t.Amount
+		if *debug {
+			fmt.Printf("Learning about account: %v\n", t.To)
+		}
 	} else {
-		cur = -t.Cur // we are looking for the opposite
+		amt = -t.Amount // we are looking for the opposite
 	}
 
 	var kind string
-	if cur >= 0 {
+	if amt >= 0 {
 		kind = "credit"
 	} else {
 		kind = "debit"
 	}
 	terms = append(terms, "Kind: "+kind)
 
-	terms = append(terms, "AmountClassFine: "+strconv.Itoa(getAmountClassFine(cur)))
-	terms = append(terms, "AmountClassCoarse: "+strconv.Itoa(getAmountClassCoarse(cur)))
+	terms = append(terms, "AmountClassFine: "+strconv.Itoa(getAmountClassFine(amt)))
+	terms = append(terms, "AmountClassCoarse: "+strconv.Itoa(getAmountClassCoarse(amt)))
 
 	if *debug {
-		fmt.Printf("getTerms(%s, %.2f) = %v\n", t.Desc, t.Cur, terms)
+		fmt.Printf("getTerms(%s, %.2f) = %v\n", t.BankDesc, t.Amount, terms)
 	}
 
 	return terms
@@ -306,19 +384,36 @@ func getAmountClassCoarse(amount float64) int {
 func (p *parser) topHits(t *txn) []bayesian.Class {
 	terms := t.getTerms()
 	scores, _, _ := p.cl.LogScores(terms)
+
+	knownAccount := bayesian.Class(t.getKnownAccount())
+
 	pairs := make([]pair, 0, len(scores))
+	skipIndex := -1
+	for pos, score := range scores {
+		if p.classes[pos] == knownAccount {
+			if *debug {
+				fmt.Printf("Removed self '%s' at index %d with score %f\n", knownAccount, pos, score)
+			}
+			skipIndex = pos
+		} else {
+			pairs = append(pairs, pair{score, pos})
+		}
+	}
+
+	if skipIndex >= 0 {
+		scores = append(scores[:skipIndex], scores[skipIndex+1:]...)
+	}
 
 	var mean, stddev float64
-	for pos, score := range scores {
-		pairs = append(pairs, pair{score, pos})
+	for _, score := range scores {
 		mean += score
 	}
 	mean /= float64(len(scores))
+
 	for _, score := range scores {
 		stddev += math.Pow(score-mean, 2)
 	}
-	stddev /= float64(len(scores) - 1)
-	stddev = math.Sqrt(stddev)
+	stddev = math.Sqrt(stddev / float64(len(scores)-1))
 
 	if *debug {
 		fmt.Printf("stddev=%f\n", stddev)
@@ -368,7 +463,7 @@ func parseDate(col string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func parseCurrency(col string) (float64, bool) {
+func parseAmount(col string) (float64, bool) {
 	f, err := strconv.ParseFloat(col, 64)
 	return f, err == nil
 }
@@ -383,15 +478,6 @@ func parseDescription(col string) (string, bool) {
 }
 
 func (p *parser) parseTransactionsFromCSV(in []byte) []txn {
-	ignored := make(map[int]bool)
-	if len(*ignore) > 0 {
-		for _, i := range strings.Split(*ignore, ",") {
-			pos, err := strconv.Atoi(i)
-			checkf(err, "Unable to convert to integer: %v", i)
-			ignored[pos] = true
-		}
-	}
-
 	result := make([]txn, 0, 100)
 	r := csv.NewReader(bytes.NewReader(in))
 	var t txn
@@ -408,65 +494,88 @@ func (p *parser) parseTransactionsFromCSV(in []byte) []txn {
 			continue
 		}
 
-		var picked []string
-		for i, col := range cols {
-			if ignored[i] {
-				continue
-			}
-			picked = append(picked, col)
-			if date, ok := parseDate(col); ok {
-				t.Date = date
-			} else if f, ok := parseCurrency(col); ok {
-				if *inverseSign {
-					f = -f
-				}
-				t.Cur = f
-			} else if d, ok := parseDescription(col); ok {
-				t.Desc = d
-			}
-		}
+		assertf(len(cols) == 9, "Mint export has unexpected number of columns %d", len(cols))
 
-		if len(t.Desc) != 0 && !t.Date.IsZero() && t.Cur != 0.0 {
-			y, m, d := t.Date.Year(), t.Date.Month(), t.Date.Day()
+		{
+			date, ok := parseDate(cols[0])
+			assertf(ok, "Cannot parse date: %s", cols[0])
+			y, m, d := date.Year(), date.Month(), date.Day()
 			t.Date = time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
-
-			// Have a unique key for each transaction in CSV, so we can uniquely identify and
-			// persist them as we modify their category.
-			hash := sha256.New()
-			fmt.Fprintf(hash, "%s\t%s\t%.2f", t.Date.Format(stamp), t.Desc, t.Cur)
-			t.Key = hash.Sum(nil)
-
-			// check if it was reconciled before (in case we are restarted after a crash)
-			p.db.View(func(tx *bolt.Tx) error {
-				b := tx.Bucket(bucketName)
-				v := b.Get(t.Key)
-				if v != nil {
-					dec := gob.NewDecoder(bytes.NewBuffer(v))
-					var td txn
-					if err := dec.Decode(&td); err == nil {
-						if t.Cur < 0 {
-							t.To = td.To
-						} else {
-							t.From = td.From
-						}
-						t.Done = true
-					}
-				}
-				return nil
-			})
-
-			result = append(result, t)
-		} else {
-			fmt.Println()
-			fmt.Printf("ERROR           : Unable to parse transaction from the selected columns in CSV.\n")
-			fmt.Printf("Selected CSV    : %v\n", strings.Join(picked, ", "))
-			fmt.Printf("Parsed Date     : %v\n", t.Date)
-			fmt.Printf("Parsed Desc     : %v\n", t.Desc)
-			fmt.Printf("Parsed Currency : %v\n", t.Cur)
-			log.Fatalln("Please ensure that the above CSV contains ALL the 3 required fields.")
 		}
+		assertf(!t.Date.IsZero(), "Invalid date for %v", cols)
+
+		t.MintDesc = cols[1]
+
+		t.BankDesc = dedupDescription(cols[2])
+		assertf(len(t.BankDesc) != 0, "No description for %v", cols)
+
+		{
+			amt, ok := parseAmount(cols[3])
+			assertf(ok, "Cannot parse amount: %s", cols[2])
+			if *inverseSign {
+				amt = -amt
+			}
+			if cols[4] == "debit" {
+				amt = -amt
+			} else {
+				assertf(cols[4] == "credit", "Expected debit or credit, got: %s", cols[4])
+			}
+			t.Amount = amt
+		}
+		assertf(t.Amount != 0.0, "Zero amount for %v", cols)
+
+		t.MintCategory = cols[5]
+
+		{
+			acc := cols[6]
+			acc = accMap.Rename[acc]
+			assertf(acc != "", "Cannot find mapping for account", cols[6])
+
+			t.setKnownAccount(acc)
+		}
+
+		// Have a unique key for each transaction in CSV, so we can uniquely identify and
+		// persist them as we modify their category.
+		hash := sha256.New()
+		fmt.Fprintf(hash, "%s\t%s\t%.2f", t.Date.Format(stamp), t.BankDesc, t.Amount)
+		t.Key = hash.Sum(nil)
+
+		// check if it was reconciled before (in case we are restarted after a crash)
+		p.db.View(func(tx *bolt.Tx) error {
+			b := tx.Bucket(bucketName)
+			v := b.Get(t.Key)
+			if v != nil {
+				dec := gob.NewDecoder(bytes.NewBuffer(v))
+				var td txn
+				if err := dec.Decode(&td); err == nil {
+					t.setPairAccount(td.getPairAccount())
+					t.Done = true
+				}
+			}
+			return nil
+		})
+
+		result = append(result, t)
 	}
 	return result
+}
+
+func dedupDescription(desc string) string {
+outer:
+	for j := len(desc) / 2; j > 3; j-- {
+		for i := 0; i < j; i++ {
+			if desc[i] != desc[j+i] {
+				continue outer
+			}
+		}
+		// found the longest duplicate
+		if *debug {
+			fmt.Printf("Deduped from: %v\n", desc)
+			fmt.Printf("Deduped to:   %v\n", desc[j:])
+		}
+		return desc[j:]
+	}
+	return desc // no deduping
 }
 
 func assignFor(opt string, cl bayesian.Class, keys map[rune]string) bool {
@@ -517,19 +626,17 @@ func saneMode() {
 	exec.Command("stty", "-F", "/dev/tty", "sane").Run()
 }
 
-func getCategory(t txn) (prefix, cat string) {
-	if t.Cur > 0 {
-		prefix = "[FROM]"
-		cat = t.From
-	} else {
-		prefix = "[TO]"
-		cat = t.To
-	}
-	return
-}
-
 func printCategory(t txn) {
-	prefix, cat := getCategory(t)
+	prefix, cat := t.getPairAccount2()
+	if len(cat) == 0 {
+		return
+	}
+	if len(cat) > catLength {
+		cat = cat[len(cat)-catLength:]
+	}
+	color.New(color.BgHiYellow, color.FgBlack).Printf(" %6s %-20s ", prefix, cat)
+
+	prefix, cat = t.getKnownAccount2()
 	if len(cat) == 0 {
 		return
 	}
@@ -561,14 +668,14 @@ func printSummary(t txn, idx, total int) {
 	}
 
 	color.New(color.BgYellow, color.FgBlack).Printf(" %10s ", t.Date.Format(stamp))
-	desc := t.Desc
+	desc := t.BankDesc
 	if len(desc) > descLength {
 		desc = desc[:descLength]
 	}
 	color.New(color.BgWhite, color.FgBlack).Printf(" %-40s", desc) // descLength used in Printf.
 	printCategory(t)
 
-	color.New(color.BgRed, color.FgWhite).Printf(" %9.2f %3s ", t.Cur, t.CurName)
+	color.New(color.BgRed, color.FgWhite).Printf(" %9.2f %3s ", t.Amount, t.Currency)
 	if *debug {
 		fmt.Printf(" hash: %s", hex.EncodeToString(t.Key))
 	}
@@ -637,11 +744,7 @@ LOOP:
 		}
 
 		category = append(category, opt)
-		if t.Cur > 0 {
-			t.From = strings.Join(category, ":")
-		} else {
-			t.To = strings.Join(category, ":")
-		}
+		t.setPairAccount(strings.Join(category, ":"))
 		label = opt
 		if ks.HasLabel(label) {
 			repeat = true
@@ -655,12 +758,17 @@ func (p *parser) printTxn(t *txn, idx, total int) int {
 	clear()
 	printSummary(*t, idx, total)
 	fmt.Println()
-	if len(t.Desc) > descLength {
-		color.New(color.BgWhite, color.FgBlack).Printf("%6s %s ", "[DESC]", t.Desc) // descLength used in Printf.
+	if len(t.BankDesc) > descLength {
+		color.New(color.BgWhite, color.FgBlack).Printf("%6s %s ", "[DESC]", t.BankDesc) // descLength used in Printf.
 		fmt.Println()
 	}
 	{
-		prefix, cat := getCategory(*t)
+		prefix, cat := t.getPairAccount2()
+		if len(cat) > catLength {
+			color.New(color.BgHiYellow, color.FgBlack).Printf("%6s %s", prefix, cat)
+			fmt.Println()
+		}
+		prefix, cat = t.getKnownAccount2()
 		if len(cat) > catLength {
 			color.New(color.BgGreen, color.FgBlack).Printf("%6s %s", prefix, cat)
 			fmt.Println()
@@ -693,11 +801,7 @@ func (p *parser) showAndCategorizeTxns(rtxns []txn) {
 			t := &txns[i]
 			if !t.Done {
 				hits := p.topHits(t)
-				if t.Cur < 0 {
-					t.To = string(hits[0])
-				} else {
-					t.From = string(hits[0])
-				}
+				t.setPairAccount(string(hits[0]))
 			}
 			printSummary(*t, i, len(txns))
 		}
@@ -733,8 +837,11 @@ func (p *parser) showAndCategorizeTxns(rtxns []txn) {
 
 func ledgerFormat(t txn) string {
 	var b bytes.Buffer
-	b.WriteString(fmt.Sprintf("%s %s\n", t.Date.Format(stamp), t.Desc))
-	b.WriteString(fmt.Sprintf("\t%-20s\t%.2f%s\n", t.To, math.Abs(t.Cur), t.CurName))
+	b.WriteString(fmt.Sprintf("%s %s\n", t.Date.Format(stamp), t.BankDesc))
+	if t.MintDesc != "" || t.MintCategory != "" {
+		b.WriteString(fmt.Sprintf("\t; %s ; %s\n", t.MintDesc, t.MintCategory))
+	}
+	b.WriteString(fmt.Sprintf("\t%-20s\t%.2f%s\n", t.To, math.Abs(t.Amount), t.Currency))
 	b.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
 	return b.String()
 }
@@ -791,13 +898,13 @@ func (p *parser) removeDuplicates(txns []txn) []txn {
 	final := txns[:0]
 	for _, t := range txns {
 		var found bool
-		tdesc := sanitize(t.Desc)
+		tdesc := sanitize(t.BankDesc)
 		for _, pr := range prev {
 			if pr.Date.After(t.Date) {
 				break
 			}
-			pdesc := sanitize(pr.Desc)
-			if tdesc == pdesc && pr.Date.Equal(t.Date) && math.Abs(pr.Cur) == math.Abs(t.Cur) {
+			pdesc := sanitize(pr.BankDesc)
+			if tdesc == pdesc && pr.Date.Equal(t.Date) && math.Abs(pr.Amount) == math.Abs(t.Amount) {
 				printSummary(t, 0, 0)
 				found = true
 				break
@@ -851,6 +958,17 @@ func main() {
 			}
 		}
 	}
+
+	{
+		f, err := os.Open("mint2ledger.yaml")
+		checkf(err, "Cannot open config file mint2ledger.yaml")
+		defer f.Close()
+
+		dec := yaml.NewDecoder(f)
+		err = dec.Decode(&accMap)
+		checkf(err, "Cannot decode accounts map")
+	}
+
 	keyfile := path.Join(*configDir, *shortcuts)
 	short = keys.ParseConfig(keyfile)
 	setDefaultMappings(short)
@@ -904,18 +1022,13 @@ func main() {
 	}
 
 	for i := range txns {
-		if txns[i].Cur > 0 {
-			txns[i].To = *account
-		} else {
-			txns[i].From = *account
-		}
-		txns[i].CurName = *currency
+		txns[i].Currency = *currency
 	}
 
 	txns = p.removeDuplicates(txns)
 	p.showAndCategorizeTxns(txns)
 
-	_, err = of.WriteString(fmt.Sprintf("; into-ledger run at %v\n\n", time.Now()))
+	_, err = of.WriteString(fmt.Sprintf("; mint2ledger run at %v\n\n", time.Now()))
 	checkf(err, "Unable to write into output file: %v", of.Name())
 
 	for _, t := range txns {

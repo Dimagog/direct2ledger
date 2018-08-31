@@ -1,4 +1,5 @@
 mint2ledger
 -----------
 
-WIP
+Import transactions downloaded from Mint.com into Ledger format.
+First working version.
