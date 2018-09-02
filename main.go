@@ -43,19 +43,20 @@ func homeDir() string {
 }
 
 var (
-	debug       = flag.Bool("debug", false, "Additional debug information if set.")
-	journal     = flag.String("j", "", "Existing journal to learn from.")
-	output      = flag.String("o", "out.ldg", "Journal file to write to.")
-	csvFile     = flag.String("csv", "", "File path of CSV file containing new transactions.")
-	currency    = flag.String("c", "", "Set currency if any.")
-	dateFormat  = flag.String("d", "1/2/2006", "Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
-	skip        = flag.Int("s", 1, "Number of header lines in CSV to skip")
-	configDir   = flag.String("conf", homeDir()+"/.into-ledger", "Config directory to store various into-ledger configs in.")
-	shortcuts   = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
-	inverseSign = flag.Bool("inverseSign", false, "Inverse sign of transaction amounts in CSV.")
-	reverseCSV  = flag.Bool("reverseCSV", true, "Reverse order of transactions in CSV")
-	allowDups   = flag.Bool("allowDups", false, "Don't filter out duplicate transactions")
-	tfidf       = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian")
+	debug        = flag.Bool("debug", false, "Additional debug information if set.")
+	journal      = flag.String("j", "", "Existing journal to learn from.")
+	output       = flag.String("o", "out.ldg", "Journal file to write to.")
+	csvFile      = flag.String("csv", "", "File path of CSV file containing new transactions.")
+	currency     = flag.String("c", "", "Set currency if any.")
+	dateFormat   = flag.String("d", "1/2/2006", "Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
+	skip         = flag.Int("s", 1, "Number of header lines in CSV to skip")
+	configDir    = flag.String("conf", homeDir()+"/.mint2ledger", "Config directory to store various mint2ledger configs in.")
+	shortcuts    = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
+	inverseSign  = flag.Bool("inverseSign", false, "Inverse sign of transaction amounts in CSV.")
+	reverseCSV   = flag.Bool("reverseCSV", true, "Reverse order of transactions in CSV")
+	allowDups    = flag.Bool("allowDups", false, "Don't filter out duplicate transactions")
+	allowPending = flag.Bool("allowPending", false, "Don't filter out pending transactions (pending detection heuristic may not always work)")
+	tfidf        = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian")
 
 	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
@@ -643,10 +644,12 @@ func printCategory(t txn) {
 
 func printSummary(t txn, idx, total int) {
 	idx++
-	if t.Done {
-		color.New(color.BgGreen, color.FgBlack).Printf(" R ")
-	} else {
-		color.New(color.BgRed, color.FgWhite).Printf(" N ")
+	if total > 0 {
+		if t.Done {
+			color.New(color.BgGreen, color.FgBlack).Printf(" R ")
+		} else {
+			color.New(color.BgRed, color.FgWhite).Printf(" N ")
+		}
 	}
 
 	if total > 999 {
@@ -658,6 +661,9 @@ func printSummary(t txn, idx, total int) {
 	} else if total == 0 {
 		// A bit of a hack, but will do.
 		color.New(color.BgBlue, color.FgWhite).Printf(" [DUPLICATE] ")
+	} else if total < 0 {
+		// A bit of a hack, but will do.
+		color.New(color.BgBlue, color.FgWhite).Printf(" [PENDING] ")
 	} else {
 		log.Fatalf("Unhandled case for total: %v", total)
 	}
@@ -932,6 +938,16 @@ func reverseSlice(s []txn) {
 func main() {
 	flag.Parse()
 
+	if len(*journal) == 0 {
+		oerr("Please specify the input ledger journal file")
+		return
+	}
+
+	if len(*output) == 0 {
+		oerr("Please specify the output file")
+		return
+	}
+
 	defer saneMode()
 	singleCharMode()
 
@@ -952,18 +968,10 @@ func main() {
 	setDefaultMappings(short)
 	defer short.Persist(keyfile)
 
-	if len(*journal) == 0 {
-		oerr("Please specify the input ledger journal file")
-		return
-	}
 	data, err := ioutil.ReadFile(*journal)
 	checkf(err, "Unable to read file: %v", *journal)
 	alldata := includeAll(path.Dir(*journal), data)
 
-	if len(*output) == 0 {
-		oerr("Please specify the output file")
-		return
-	}
 	if _, err := os.Stat(*output); os.IsNotExist(err) {
 		_, err := os.Create(*output)
 		checkf(err, "Unable to check for output file: %v", *output)
@@ -995,6 +1003,7 @@ func main() {
 	in, err := ioutil.ReadFile(*csvFile)
 	checkf(err, "Unable to read csv file: %v", *csvFile)
 	txns := p.parseTransactionsFromCSV(in)
+	txns = removePendingTransactions(txns)
 	if *reverseCSV {
 		reverseSlice(txns)
 	}
@@ -1004,9 +1013,13 @@ func main() {
 	}
 
 	txns = p.removeDuplicates(txns)
+	if len(txns) == 0 {
+		return
+	}
+
 	p.showAndCategorizeTxns(txns)
 
-	_, err = of.WriteString(fmt.Sprintf("; mint2ledger run at %v\n\n", time.Now()))
+	_, err = of.WriteString(fmt.Sprintf("; mint2ledger run at %v\n\n", time.Now().Format("2006-01-02 15:04:05 MST")))
 	checkf(err, "Unable to write into output file: %v", of.Name())
 
 	for _, t := range txns {
@@ -1017,4 +1030,21 @@ func main() {
 		}
 	}
 	checkf(of.Close(), "Unable to close output file: %v", of.Name())
+}
+
+func removePendingTransactions(txns []txn) []txn {
+	if !*allowPending && len(txns) > 0 {
+		lastDate := txns[0].Date
+		for i, t := range txns {
+			if t.Date.After(lastDate) {
+				for j := 0; j < i; j++ {
+					printSummary(txns[j], 0, -1)
+				}
+				fmt.Printf("\t%d pending transactions were ignored.\n\n", i)
+				return txns[i:]
+			}
+			lastDate = t.Date
+		}
+	}
+	return txns
 }
