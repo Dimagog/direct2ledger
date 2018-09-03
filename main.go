@@ -43,10 +43,8 @@ func homeDir() string {
 }
 
 var (
-	debug        = flag.Bool("debug", false, "Additional debug information if set.")
-	journal      = flag.String("j", "", "Existing journal to learn from.")
+	debug        = flag.Bool("debug", false, "Print additional debug information.")
 	output       = flag.String("o", "out.ldg", "Journal file to write to.")
-	csvFile      = flag.String("csv", "", "File path of CSV file containing new transactions.")
 	currency     = flag.String("c", "", "Set currency if any.")
 	dateFormat   = flag.String("d", "1/2/2006", "Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
 	skip         = flag.Int("s", 1, "Number of header lines in CSV to skip")
@@ -56,7 +54,10 @@ var (
 	reverseCSV   = flag.Bool("reverseCSV", true, "Reverse order of transactions in CSV")
 	allowDups    = flag.Bool("allowDups", false, "Don't filter out duplicate transactions")
 	allowPending = flag.Bool("allowPending", false, "Don't filter out pending transactions (pending detection heuristic may not always work)")
-	tfidf        = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian")
+	tfidf        = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian (works better for small ledgers, when you are just starting)")
+
+	ledgerFile = ""
+	csvFile    = ""
 
 	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
@@ -189,7 +190,7 @@ type parser struct {
 }
 
 func (p *parser) parseTransactions() {
-	out, err := exec.Command("ledger", "-f", *journal, "csv").Output()
+	out, err := exec.Command("ledger", "-f", ledgerFile, "csv").Output()
 	checkf(err, "Unable to convert journal to csv. Possibly an issue with your ledger installation.")
 	r := csv.NewReader(newConverter(bytes.NewReader(out)))
 	var t txn
@@ -921,12 +922,21 @@ func (p *parser) removeDuplicates(txns []txn) []txn {
 
 var errc = color.New(color.BgRed, color.FgWhite).PrintfFunc()
 
-func oerr(msg string) {
-	errc("\tERROR: " + msg + " ")
-	fmt.Println()
-	fmt.Println("Flags available:")
+func usage() {
+	fmt.Println("\nUsage:\n" +
+		"\tmint2ledger [options] <ledger-file> <csv-file>\n\n" +
+		"  where:\n" +
+		"\t<ledger-file> is an existing Ledger file to learn from\n" +
+		"\t<csv-file>    is a CSV file containing new transactions import\n\n" +
+		"Options:")
 	flag.PrintDefaults()
 	fmt.Println()
+	os.Exit(2)
+}
+
+func usageMsg(msg string) {
+	fmt.Fprintln(os.Stderr, msg)
+	usage()
 }
 
 func reverseSlice(s []txn) {
@@ -936,16 +946,18 @@ func reverseSlice(s []txn) {
 }
 
 func main() {
+	flag.Usage = usage
 	flag.Parse()
 
-	if len(*journal) == 0 {
-		oerr("Please specify the input ledger journal file")
-		return
+	if flag.NArg() != 2 {
+		usageMsg("Please specify the input ledger file and a csv file")
 	}
 
+	ledgerFile = flag.Arg(0)
+	csvFile = flag.Arg(1)
+
 	if len(*output) == 0 {
-		oerr("Please specify the output file")
-		return
+		usageMsg("Please specify the output file")
 	}
 
 	defer saneMode()
@@ -968,9 +980,9 @@ func main() {
 	setDefaultMappings(short)
 	defer short.Persist(keyfile)
 
-	data, err := ioutil.ReadFile(*journal)
-	checkf(err, "Unable to read file: %v", *journal)
-	alldata := includeAll(path.Dir(*journal), data)
+	data, err := ioutil.ReadFile(ledgerFile)
+	checkf(err, "Unable to read file: %v", ledgerFile)
+	alldata := includeAll(path.Dir(ledgerFile), data)
 
 	if _, err := os.Stat(*output); os.IsNotExist(err) {
 		_, err := os.Create(*output)
@@ -1000,8 +1012,8 @@ func main() {
 	// Scanning done. Now train classifier.
 	p.generateClasses()
 
-	in, err := ioutil.ReadFile(*csvFile)
-	checkf(err, "Unable to read csv file: %v", *csvFile)
+	in, err := ioutil.ReadFile(csvFile)
+	checkf(err, "Unable to read csv file: %v", csvFile)
 	txns := p.parseTransactionsFromCSV(in)
 	txns = removePendingTransactions(txns)
 	if *reverseCSV {
