@@ -22,12 +22,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/boltdb/bolt"
+	"github.com/c-bata/go-prompt"
 	"github.com/eiannone/keyboard"
 	"github.com/fatih/color"
 	"github.com/jbrukh/bayesian"
-	"github.com/manishrjain/keys"
 	"github.com/pkg/errors"
 
 	mathex "github.com/pkg/math"
@@ -48,8 +49,6 @@ var (
 	currency     = flag.String("c", "", "Set currency if any.")
 	dateFormat   = flag.String("d", "1/2/2006", "Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
 	skip         = flag.Int("s", 1, "Number of header lines in CSV to skip")
-	configDir    = flag.String("conf", homeDir()+"/.mint2ledger", "Config directory to store various mint2ledger configs in.")
-	shortcuts    = flag.String("short", "shortcuts.yaml", "Name of shortcuts file.")
 	inverseSign  = flag.Bool("inverseSign", false, "Inverse sign of transaction amounts in CSV.")
 	reverseCSV   = flag.Bool("reverseCSV", true, "Reverse order of transactions in CSV")
 	allowDups    = flag.Bool("allowDups", false, "Don't filter out duplicate transactions")
@@ -70,18 +69,9 @@ var (
 	bucketName = []byte("txns")
 	descLength = 40
 	catLength  = 20
-	short      *keys.Shortcuts
 
 	accMap accountsConfig
 )
-
-type accountFlags struct {
-	flags map[string]string
-}
-
-type configs struct {
-	Accounts map[string]map[string]string // account and the corresponding config.
-}
 
 type accountsConfig struct {
 	Rename map[string]string `yaml:"Rename"`
@@ -166,20 +156,6 @@ func assertf(ok bool, format string, args ...interface{}) {
 	}
 }
 
-func assignForAccount(account string) {
-	tree := strings.Split(account, ":")
-	assertf(len(tree) > 0, "Expected at least one result. Found none for: %v", account)
-	short.AutoAssign(tree[0], "default")
-	prev := tree[0]
-	for _, c := range tree[1:] {
-		if len(c) == 0 {
-			continue
-		}
-		short.AutoAssign(c, prev)
-		prev = c
-	}
-}
-
 type parser struct {
 	db       *bolt.DB
 	data     []byte
@@ -222,8 +198,6 @@ func (p *parser) parseTransactions() {
 		}
 
 		p.txns = append(p.txns, t)
-
-		assignForAccount(t.To)
 	}
 }
 
@@ -240,7 +214,6 @@ func (p *parser) parseAccounts() {
 			continue
 		}
 		p.accounts = append(p.accounts, acc)
-		assignForAccount(acc)
 	}
 }
 
@@ -480,7 +453,7 @@ func (p *parser) parseTransactionsFromCSV(in []byte) []txn {
 	var t txn
 	var skipped int
 	for {
-		t = txn{}
+		t = txn{Currency: *currency}
 		cols, err := r.Read()
 		if err == io.EOF {
 			break
@@ -586,13 +559,6 @@ func assignFor(opt string, cl bayesian.Class, keys map[rune]string) bool {
 	return false
 }
 
-func setDefaultMappings(ks *keys.Shortcuts) {
-	ks.BestEffortAssign('b', ".back", "default")
-	ks.BestEffortAssign('q', ".quit", "default")
-	ks.BestEffortAssign('a', ".show all", "default")
-	ks.BestEffortAssign('s', ".skip", "default")
-}
-
 type kv struct {
 	key rune
 	val string
@@ -623,7 +589,7 @@ func saneMode() {
 	exec.Command("stty", "-F", "/dev/tty", "sane").Run()
 }
 
-func printCategory(t txn) {
+func printCategory(t *txn) {
 	prefix, cat := t.getPairAccount2()
 	if len(cat) == 0 {
 		return
@@ -643,7 +609,7 @@ func printCategory(t txn) {
 	color.New(color.BgGreen, color.FgBlack).Printf(" %6s %-20s ", prefix, cat)
 }
 
-func printSummary(t txn, idx, total int) {
+func printSummary(t *txn, idx, total int) {
 	idx++
 	if total > 0 {
 		if t.Done {
@@ -704,34 +670,78 @@ func (p *parser) writeToDB(t txn) {
 	}
 }
 
-func (p *parser) printAndGetResult(ks keys.Shortcuts, t *txn) int {
-	label := "default"
+func buildCompleter(accounts []bayesian.Class) prompt.Completer {
+	strs := make([]string, len(accounts))
+	for i, a := range accounts {
+		strs[i] = string(a)
+	}
+	sort.Strings(strs)
 
-	var repeat bool
-	var category []string
-LOOP:
-	if len(category) > 0 {
-		fmt.Println()
-		color.New(color.BgWhite, color.FgBlack).Printf("Selected [%s]", strings.Join(category, ":")) // descLength used in Printf.
-		fmt.Println()
+	sug := make([]prompt.Suggest, len(strs))
+	for i, a := range strs {
+		sug[i] = prompt.Suggest{Text: a}
 	}
 
-	ks.Print(label, false)
-	ch, key, _ := keyboard.GetSingleKey()
-	if ch == 0 && key == keyboard.KeyEnter && len(t.To) > 0 && len(t.From) > 0 {
-		t.Done = true
-		p.writeToDB(*t)
-		if repeat {
+	return func(d prompt.Document) []prompt.Suggest {
+		return prompt.FilterContains(sug, d.GetWordBeforeCursor(), true)
+	}
+}
+
+func (p *parser) printAndGetResult(hits []bayesian.Class, t *txn) int {
+	for {
+		for i, acc := range hits {
+			fmt.Printf("%2d. %s\n", (i+1)%10, acc)
+		}
+		fmt.Println()
+
+		fmt.Print("[Enter]=Accept, [space]=type in, (b)ack, (s)kip, show (a)all, (q)uit or number> ")
+		ch, key, _ := keyboard.GetSingleKey()
+		if unicode.IsPrint(ch) {
+			fmt.Printf("%c", ch)
+		}
+		fmt.Println()
+
+		if ch == 0 && key == keyboard.KeyEnter && len(t.To) > 0 && len(t.From) > 0 {
+			t.Done = true
+			p.writeToDB(*t)
+			return 1
+		}
+
+		var account string
+
+		if unicode.IsDigit(ch) {
+			choice := int(ch - '0')
+			if choice == 0 {
+				choice = 10
+			}
+			choice--
+			if choice >= len(hits) {
+				fmt.Println()
+				color.New(color.BgRed, color.FgWhite).Printf(" Invalid number ")
+				fmt.Println()
+				continue
+			}
+
+			account = string(hits[choice])
+		} else if ch == 0 && key == keyboard.KeySpace {
+			account = prompt.Input("Enter account> ", buildCompleter(p.classes))
+			if account == "" {
+				return 0
+			}
+		}
+
+		if account != "" {
+			fmt.Println()
+			color.New(color.BgWhite, color.FgBlack).Printf("Selected [%s]", account)
+			fmt.Println()
+			t.setPairAccount(account)
 			return 0
 		}
-		return 1
-	}
 
-	if opt, has := ks.MapsTo(ch, label); has {
-		switch opt {
-		case ".back":
+		switch ch {
+		case 'b':
 			return -1
-		case ".skip":
+		case 's':
 			t.Done = false
 			p.db.Update(func(tx *bolt.Tx) error {
 				b := tx.Bucket(bucketName)
@@ -739,26 +749,17 @@ LOOP:
 				return nil
 			})
 			return 1
-		case ".quit":
+		case 'q':
 			return 9999
-		case ".show all":
+		case 'a':
 			return math.MaxInt16
 		}
-
-		category = append(category, opt)
-		t.setPairAccount(strings.Join(category, ":"))
-		label = opt
-		if ks.HasLabel(label) {
-			repeat = true
-			goto LOOP
-		}
 	}
-	return 0
 }
 
 func (p *parser) printTxn(t *txn, idx, total int) int {
 	clear()
-	printSummary(*t, idx, total)
+	printSummary(t, idx, total)
 	fmt.Println()
 	if len(t.BankDesc) > descLength {
 		color.New(color.BgWhite, color.FgBlack).Printf("%6s %s ", "[DESC]", t.BankDesc) // descLength used in Printf.
@@ -779,33 +780,26 @@ func (p *parser) printTxn(t *txn, idx, total int) int {
 	fmt.Println()
 
 	hits := p.topHits(t)
-	var ks keys.Shortcuts
-	setDefaultMappings(&ks)
-	for _, hit := range hits {
-		ks.AutoAssign(string(hit), "default")
-	}
-	res := p.printAndGetResult(ks, t)
+	res := p.printAndGetResult(hits, t)
 	if res != math.MaxInt16 {
 		return res
 	}
 
 	clear()
-	printSummary(*t, idx, total)
-	res = p.printAndGetResult(*short, t)
+	printSummary(t, idx, total)
+	res = p.printAndGetResult(hits, t)
 	return res
 }
 
-func (p *parser) showAndCategorizeTxns(rtxns []txn) {
-	txns := rtxns
+func (p *parser) showAndCategorizeTxns(txns []txn) {
 	for {
 		for i := 0; i < len(txns); i++ {
-			// for i := range txns {
 			t := &txns[i]
 			if !t.Done {
 				hits := p.topHits(t)
 				t.setPairAccount(string(hits[0]))
 			}
-			printSummary(*t, i, len(txns))
+			printSummary(t, i, len(txns))
 		}
 		fmt.Println()
 
@@ -907,7 +901,7 @@ func (p *parser) removeDuplicates(txns []txn) []txn {
 			}
 			pdesc := sanitize(pr.BankDesc)
 			if tdesc == pdesc && pr.Date.Equal(t.Date) && math.Abs(pr.Amount) == math.Abs(t.Amount) {
-				printSummary(t, 0, 0)
+				printSummary(&t, 0, 0)
 				found = true
 				break
 			}
@@ -963,8 +957,6 @@ func main() {
 	defer saneMode()
 	singleCharMode()
 
-	checkf(os.MkdirAll(*configDir, 0755), "Unable to create directory: %v", *configDir)
-
 	{
 		f, err := os.Open("mint2ledger.yaml")
 		checkf(err, "Cannot open config file mint2ledger.yaml")
@@ -974,11 +966,6 @@ func main() {
 		err = dec.Decode(&accMap)
 		checkf(err, "Cannot decode accounts map")
 	}
-
-	keyfile := path.Join(*configDir, *shortcuts)
-	short = keys.ParseConfig(keyfile)
-	setDefaultMappings(short)
-	defer short.Persist(keyfile)
 
 	data, err := ioutil.ReadFile(ledgerFile)
 	checkf(err, "Unable to read file: %v", ledgerFile)
@@ -1020,10 +1007,6 @@ func main() {
 		reverseSlice(txns)
 	}
 
-	for i := range txns {
-		txns[i].Currency = *currency
-	}
-
 	txns = p.removeDuplicates(txns)
 	if len(txns) == 0 {
 		return
@@ -1050,7 +1033,7 @@ func removePendingTransactions(txns []txn) []txn {
 		for i, t := range txns {
 			if t.Date.After(lastDate) {
 				for j := 0; j < i; j++ {
-					printSummary(txns[j], 0, -1)
+					printSummary(&txns[j], 0, -1)
 				}
 				fmt.Printf("\t%d pending transactions were ignored.\n\n", i)
 				return txns[i:]
