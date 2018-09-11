@@ -46,7 +46,7 @@ func homeDir() string {
 var (
 	debug        = flag.Bool("debug", false, "Print additional debug information.")
 	output       = flag.String("o", "out.ldg", "Journal file to write to.")
-	currency     = flag.String("c", "", "Set currency if any.")
+	currency     = flag.String("c", "$", "Set currency.")
 	dateFormat   = flag.String("d", "1/2/2006", "Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
 	skip         = flag.Int("s", 1, "Number of header lines in CSV to skip")
 	inverseSign  = flag.Bool("inverseSign", false, "Inverse sign of transaction amounts in CSV.")
@@ -837,7 +837,12 @@ func ledgerFormat(t txn) string {
 	if t.MintDesc != "" || t.MintCategory != "" {
 		b.WriteString(fmt.Sprintf("\t; %s ; %s\n", t.MintDesc, t.MintCategory))
 	}
-	b.WriteString(fmt.Sprintf("\t%-20s\t%.2f%s\n", t.To, math.Abs(t.Amount), t.Currency))
+	b.WriteString(fmt.Sprintf("\t%-20s\t", t.To))
+	if len([]rune(t.Currency)) <= 1 {
+		b.WriteString(fmt.Sprintf("%s%.2f\n", t.Currency, math.Abs(t.Amount)))
+	} else {
+		b.WriteString(fmt.Sprintf("%.2f %s\n", math.Abs(t.Amount), t.Currency))
+	}
 	b.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
 	return b.String()
 }
