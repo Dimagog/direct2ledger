@@ -50,7 +50,7 @@ var (
 	dateFormat   = flag.String("d", "1/2/2006", "Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
 	skip         = flag.Int("s", 1, "Number of header lines in CSV to skip")
 	inverseSign  = flag.Bool("inverseSign", false, "Inverse sign of transaction amounts in CSV.")
-	reverseCSV   = flag.Bool("reverseCSV", true, "Reverse order of transactions in CSV")
+	reverseCSV   = flag.Bool("reverseCSV", false, "Reverse order of transactions in CSV")
 	allowDups    = flag.Bool("allowDups", false, "Don't filter out duplicate transactions")
 	allowPending = flag.Bool("allowPending", false, "Don't filter out pending transactions (pending detection heuristic may not always work)")
 	tfidf        = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian (works better for small ledgers, when you are just starting)")
@@ -765,6 +765,18 @@ func (p *parser) printTxn(t *txn, idx, total int) int {
 		color.New(color.BgWhite, color.FgBlack).Printf("%6s %s ", "[DESC]", t.BankDesc) // descLength used in Printf.
 		fmt.Println()
 	}
+	needNewLine := false
+	if len(t.MintDesc) > 0 {
+		color.New(color.BgCyan, color.FgBlack).Printf("%6s %s ", "[MINT]", t.MintDesc)
+		needNewLine = true
+	}
+	if len(t.MintCategory) > 0 {
+		color.New(color.BgCyan, color.FgBlack).Printf("%6s %s ", "[CAT]", t.MintCategory)
+		needNewLine = true
+	}
+	if needNewLine {
+		fmt.Println()
+	}
 	{
 		prefix, cat := t.getPairAccount2()
 		if len(cat) > catLength {
@@ -837,7 +849,7 @@ func ledgerFormat(t txn) string {
 	if t.MintDesc != "" || t.MintCategory != "" {
 		b.WriteString(fmt.Sprintf("\t; %s ; %s\n", t.MintDesc, t.MintCategory))
 	}
-	b.WriteString(fmt.Sprintf("\t%-20s\t", t.To))
+	b.WriteString(fmt.Sprintf("\t%-20s \t", t.To))
 	if len([]rune(t.Currency)) <= 1 {
 		b.WriteString(fmt.Sprintf("%s%.2f\n", t.Currency, math.Abs(t.Amount)))
 	} else {
