@@ -26,6 +26,7 @@ import (
 
 	"github.com/boltdb/bolt"
 	"github.com/c-bata/go-prompt"
+	"github.com/dimagog/ofxgo"
 	"github.com/eiannone/keyboard"
 	"github.com/fatih/color"
 	"github.com/jbrukh/bayesian"
@@ -70,11 +71,28 @@ var (
 	descLength = 40
 	catLength  = 20
 
-	accMap accountsConfig
+	config appConfig
 )
 
-type accountsConfig struct {
-	Rename map[string]string `yaml:"Rename"`
+type appConfig struct {
+	Banks []bank
+}
+
+type bank struct {
+	Name     string
+	Org      string
+	FID      int
+	URL      string
+	BankID   string
+	Username string
+	ClientID string
+	Accounts []account
+}
+
+type account struct {
+	Name   string
+	AcctID string
+	Type   string
 }
 
 type txn struct {
@@ -142,7 +160,7 @@ func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
 
 func checkf(err error, format string, args ...interface{}) {
 	if err != nil {
-		log.Printf(format, args)
+		log.Printf(format, args...)
 		log.Println()
 		log.Fatalf("%+v", errors.WithStack(err))
 	}
@@ -150,8 +168,7 @@ func checkf(err error, format string, args ...interface{}) {
 
 func assertf(ok bool, format string, args ...interface{}) {
 	if !ok {
-		log.Printf(format, args)
-		log.Println()
+		log.Printf(format, args...)
 		log.Fatalf("%+v", errors.Errorf("Should be true, but is false"))
 	}
 }
@@ -498,8 +515,8 @@ func (p *parser) parseTransactionsFromCSV(in []byte) []txn {
 
 		{
 			acc := cols[6]
-			acc = accMap.Rename[acc]
-			assertf(acc != "", "Cannot find mapping for account", cols[6])
+			// acc = accMap.Rename[acc]
+			// assertf(acc != "", "Cannot find mapping for account %s", cols[6])
 
 			t.setKnownAccount(acc)
 		}
@@ -935,7 +952,7 @@ var errc = color.New(color.BgRed, color.FgWhite).PrintfFunc()
 
 func usage() {
 	fmt.Println("\nUsage:\n" +
-		"\tmint2ledger [options] <ledger-file> <csv-file>\n\n" +
+		"\tdirect2ledger [options] <ledger-file> <csv-file>\n\n" +
 		"  where:\n" +
 		"\t<ledger-file> is an existing Ledger file to learn from\n" +
 		"\t<csv-file>    is a CSV file containing new transactions import\n\n" +
@@ -975,13 +992,42 @@ func main() {
 	singleCharMode()
 
 	{
-		f, err := os.Open("mint2ledger.yaml")
-		checkf(err, "Cannot open config file mint2ledger.yaml")
+		f, err := os.Open("direct2ledger.yaml")
+		checkf(err, "Cannot open config file direct2ledger.yaml")
 		defer f.Close()
 
 		dec := yaml.NewDecoder(f)
-		err = dec.Decode(&accMap)
-		checkf(err, "Cannot decode accounts map")
+		err = dec.Decode(&config)
+		checkf(err, "Cannot read accounts")
+		for _, bank := range config.Banks {
+			for _, acc := range bank.Accounts {
+				resp := download(&bank, &acc)
+
+				meaning, _ := resp.Signon.Status.CodeMeaning()
+				assertf(resp.Signon.Status.Code == 0, "Signon failed: %s", meaning)
+
+				if len(resp.Bank) > 0 {
+					if stmt, ok := resp.Bank[0].(*ofxgo.StatementResponse); ok {
+						fmt.Printf("Balance: %s %s (as of %s)\n", stmt.BalAmt, stmt.CurDef, stmt.DtAsOf)
+						fmt.Println("Transactions:")
+						for _, tran := range stmt.BankTranList.Transactions {
+							printTransaction(stmt.CurDef, &tran)
+						}
+					}
+				} else if len(resp.CreditCard) > 0 {
+					if stmt, ok := resp.CreditCard[0].(*ofxgo.CCStatementResponse); ok {
+						fmt.Printf("Balance: %s %s (as of %s)\n", stmt.BalAmt, stmt.CurDef, stmt.DtAsOf)
+						fmt.Println("Transactions:")
+						for _, tran := range stmt.BankTranList.Transactions {
+							printTransaction(stmt.CurDef, &tran)
+						}
+					}
+				} else {
+					assertf(false, "No messages received")
+				}
+			}
+		}
+		os.Exit(0)
 	}
 
 	data, err := ioutil.ReadFile(ledgerFile)
@@ -1031,7 +1077,7 @@ func main() {
 
 	p.showAndCategorizeTxns(txns)
 
-	_, err = of.WriteString(fmt.Sprintf("; mint2ledger run at %v\n\n", time.Now().Format("2006-01-02 15:04:05 MST")))
+	_, err = of.WriteString(fmt.Sprintf("; direct2ledger run at %v\n\n", time.Now().Format("2006-01-02 15:04:05 MST")))
 	checkf(err, "Unable to write into output file: %v", of.Name())
 
 	for _, t := range txns {
@@ -1059,4 +1105,24 @@ func removePendingTransactions(txns []txn) []txn {
 		}
 	}
 	return txns
+}
+
+func printTransaction(defCurrency ofxgo.CurrSymbol, tran *ofxgo.Transaction) {
+	currency := defCurrency
+	if ok, _ := tran.Currency.Valid(); ok {
+		currency = tran.Currency.CurSym
+	}
+
+	var name string
+	if len(tran.Name) > 0 {
+		name = string(tran.Name)
+	} else if tran.Payee != nil {
+		name = string(tran.Payee.Name)
+	}
+
+	if len(tran.Memo) > 0 {
+		name = name + " - " + string(tran.Memo)
+	}
+
+	fmt.Printf("%s %-15s %-11s %s\n", tran.DtPosted, tran.TrnAmt.String()+" "+currency.String(), tran.TrnType, name)
 }

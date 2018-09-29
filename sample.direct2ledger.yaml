@@ -1,0 +1,14 @@
+banks:
+  - name: <Optional Bank Name if org below is not descriptive (like B1 for Chase)>
+    org: <FI Org from http://www.ofxhome.com>
+    fid: <FI Id from http://www.ofxhome.com>
+    url: <FI Url from http://www.ofxhome.com>
+    bankid: <FI Bank Id from http://www.ofxhome.com or from your FI, not required for credit cards>
+    username: <your username>
+    clientid: <only required for Chase, use any random ID then login to chase.com and go to Secure Messages>
+    accounts:
+      - name: <Ledger account name, like Asset:Checking>
+        acctid: <account ID>
+        type: <should be SAVING or CHECKING or CREDIT/CREDITCARD/CREDITLINE>
+      - ... another account
+  - ... another bank

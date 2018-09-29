@@ -1,3 +1,5 @@
-/mint2ledger
-/mint2ledger.exe
+/direct2ledger
+/direct2ledger.exe
 /out.ldg
+*direct2ledger.yaml
+!sample.direct2ledger.yaml
