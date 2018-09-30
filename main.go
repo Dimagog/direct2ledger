@@ -10,7 +10,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"math"
 	"os"
@@ -57,7 +56,6 @@ var (
 	tfidf        = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian (works better for small ledgers, when you are just starting)")
 
 	ledgerFile = ""
-	csvFile    = ""
 
 	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
 	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
@@ -161,7 +159,6 @@ func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
 func checkf(err error, format string, args ...interface{}) {
 	if err != nil {
 		log.Printf(format, args...)
-		log.Println()
 		log.Fatalf("%+v", errors.WithStack(err))
 	}
 }
@@ -175,7 +172,6 @@ func assertf(ok bool, format string, args ...interface{}) {
 
 type parser struct {
 	db       *bolt.DB
-	data     []byte
 	txns     []txn
 	classes  []bayesian.Class
 	cl       *bayesian.Classifier
@@ -183,9 +179,15 @@ type parser struct {
 }
 
 func (p *parser) parseTransactions() {
-	out, err := exec.Command("ledger", "-f", ledgerFile, "csv").Output()
-	checkf(err, "Unable to convert journal to csv. Possibly an issue with your ledger installation.")
-	r := csv.NewReader(newConverter(bytes.NewReader(out)))
+	const errText = "Unable to convert journal to csv. Possibly an issue with your ledger installation."
+
+	cmd := exec.Command("ledger", "-f", ledgerFile, "csv")
+	out, err := cmd.StdoutPipe()
+	checkf(err, errText)
+	err = cmd.Start()
+	checkf(err, errText)
+
+	r := csv.NewReader(newConverter(out))
 	var t txn
 	for {
 		cols, err := r.Read()
@@ -216,22 +218,31 @@ func (p *parser) parseTransactions() {
 
 		p.txns = append(p.txns, t)
 	}
+
+	err = cmd.Wait()
+	checkf(err, errText)
 }
 
 func (p *parser) parseAccounts() {
-	s := bufio.NewScanner(bytes.NewReader(p.data))
-	var acc string
+	const errText = "Unable to extract accounts from journal. Possibly an issue with your ledger installation."
+
+	cmd := exec.Command("ledger", "-f", ledgerFile, "accounts")
+	out, err := cmd.StdoutPipe()
+	checkf(err, errText)
+
+	err = cmd.Start()
+	checkf(err, errText)
+
+	s := bufio.NewScanner(out)
 	for s.Scan() {
-		m := racc.FindStringSubmatch(s.Text())
-		if len(m) < 2 {
-			continue
+		acc := s.Text()
+		if acc != "" {
+			p.accounts = append(p.accounts, acc)
 		}
-		acc = m[1]
-		if len(acc) == 0 {
-			continue
-		}
-		p.accounts = append(p.accounts, acc)
 	}
+
+	err = cmd.Wait()
+	checkf(err, errText)
 }
 
 func (p *parser) generateClasses() {
@@ -423,25 +434,6 @@ func (p *parser) topHits(t *txn) []bayesian.Class {
 	return result
 }
 
-func includeAll(dir string, data []byte) []byte {
-	final := make([]byte, len(data))
-	copy(final, data)
-
-	b := bytes.NewBuffer(data)
-	s := bufio.NewScanner(b)
-	for s.Scan() {
-		line := s.Text()
-		if !strings.HasPrefix(line, "include ") {
-			continue
-		}
-		fname := strings.Trim(line[8:], " \n")
-		include, err := ioutil.ReadFile(path.Join(dir, fname))
-		checkf(err, "Unable to read file: %v", fname)
-		final = append(final, include...)
-	}
-	return final
-}
-
 func parseDate(col string) (time.Time, bool) {
 	tm, err := time.Parse(*dateFormat, col)
 	if err == nil {
@@ -595,17 +587,6 @@ func (b byVal) Swap(i int, j int) {
 	b[i], b[j] = b[j], b[i]
 }
 
-func singleCharMode() {
-	// disable input buffering
-	exec.Command("stty", "-F", "/dev/tty", "cbreak", "min", "1").Run()
-	// do not display entered characters on the screen
-	exec.Command("stty", "-F", "/dev/tty", "-echo").Run()
-}
-
-func saneMode() {
-	exec.Command("stty", "-F", "/dev/tty", "sane").Run()
-}
-
 func printCategory(t *txn) {
 	prefix, cat := t.getPairAccount2()
 	if len(cat) == 0 {
@@ -668,9 +649,6 @@ func printSummary(t *txn, idx, total int) {
 }
 
 func clear() {
-	cmd := exec.Command("clear")
-	cmd.Stdout = os.Stdout
-	cmd.Run()
 	fmt.Println()
 }
 
@@ -977,19 +955,15 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 
-	if flag.NArg() != 2 {
-		usageMsg("Please specify the input ledger file and a csv file")
+	if flag.NArg() != 1 {
+		usageMsg("Please specify the input ledger file")
 	}
 
 	ledgerFile = flag.Arg(0)
-	csvFile = flag.Arg(1)
 
 	if len(*output) == 0 {
 		usageMsg("Please specify the output file")
 	}
-
-	defer saneMode()
-	singleCharMode()
 
 	{
 		f, err := os.Open("direct2ledger.yaml")
@@ -999,44 +973,35 @@ func main() {
 		dec := yaml.NewDecoder(f)
 		err = dec.Decode(&config)
 		checkf(err, "Cannot read accounts")
-		for _, bank := range config.Banks {
-			for _, acc := range bank.Accounts {
-				resp := download(&bank, &acc)
+		// for _, bank := range config.Banks {
+		// 	for _, acc := range bank.Accounts {
+		// 		resp := download(&bank, &acc)
 
-				meaning, _ := resp.Signon.Status.CodeMeaning()
-				assertf(resp.Signon.Status.Code == 0, "Signon failed: %s", meaning)
+		// 		meaning, _ := resp.Signon.Status.CodeMeaning()
+		// 		assertf(resp.Signon.Status.Code == 0, "Signon failed: %s", meaning)
 
-				if len(resp.Bank) > 0 {
-					if stmt, ok := resp.Bank[0].(*ofxgo.StatementResponse); ok {
-						fmt.Printf("Balance: %s %s (as of %s)\n", stmt.BalAmt, stmt.CurDef, stmt.DtAsOf)
-						fmt.Println("Transactions:")
-						for _, tran := range stmt.BankTranList.Transactions {
-							printTransaction(stmt.CurDef, &tran)
-						}
-					}
-				} else if len(resp.CreditCard) > 0 {
-					if stmt, ok := resp.CreditCard[0].(*ofxgo.CCStatementResponse); ok {
-						fmt.Printf("Balance: %s %s (as of %s)\n", stmt.BalAmt, stmt.CurDef, stmt.DtAsOf)
-						fmt.Println("Transactions:")
-						for _, tran := range stmt.BankTranList.Transactions {
-							printTransaction(stmt.CurDef, &tran)
-						}
-					}
-				} else {
-					assertf(false, "No messages received")
-				}
-			}
-		}
-		os.Exit(0)
-	}
-
-	data, err := ioutil.ReadFile(ledgerFile)
-	checkf(err, "Unable to read file: %v", ledgerFile)
-	alldata := includeAll(path.Dir(ledgerFile), data)
-
-	if _, err := os.Stat(*output); os.IsNotExist(err) {
-		_, err := os.Create(*output)
-		checkf(err, "Unable to check for output file: %v", *output)
+		// 		if len(resp.Bank) > 0 {
+		// 			if stmt, ok := resp.Bank[0].(*ofxgo.StatementResponse); ok {
+		// 				fmt.Printf("Balance: %s %s (as of %s)\n", stmt.BalAmt, stmt.CurDef, stmt.DtAsOf)
+		// 				fmt.Println("Transactions:")
+		// 				for _, tran := range stmt.BankTranList.Transactions {
+		// 					printTransaction(stmt.CurDef, &tran)
+		// 				}
+		// 			}
+		// 		} else if len(resp.CreditCard) > 0 {
+		// 			if stmt, ok := resp.CreditCard[0].(*ofxgo.CCStatementResponse); ok {
+		// 				fmt.Printf("Balance: %s %s (as of %s)\n", stmt.BalAmt, stmt.CurDef, stmt.DtAsOf)
+		// 				fmt.Println("Transactions:")
+		// 				for _, tran := range stmt.BankTranList.Transactions {
+		// 					printTransaction(stmt.CurDef, &tran)
+		// 				}
+		// 			}
+		// 		} else {
+		// 			assertf(false, "No messages received")
+		// 		}
+		// 	}
+		// }
+		// os.Exit(0)
 	}
 
 	tf := path.Join(os.TempDir(), "ledger-csv-txns")
@@ -1052,19 +1017,17 @@ func main() {
 		return nil
 	})
 
-	of, err := os.OpenFile(*output, os.O_APPEND|os.O_WRONLY, 0600)
+	of, err := os.OpenFile(*output, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	checkf(err, "Unable to open output file: %v", *output)
 
-	p := parser{data: alldata, db: db}
+	p := parser{db: db}
 	p.parseAccounts()
 	p.parseTransactions()
 
 	// Scanning done. Now train classifier.
 	p.generateClasses()
 
-	in, err := ioutil.ReadFile(csvFile)
-	checkf(err, "Unable to read csv file: %v", csvFile)
-	txns := p.parseTransactionsFromCSV(in)
+	var txns []txn // TODO: download txns here
 	txns = removePendingTransactions(txns)
 	if *reverseCSV {
 		reverseSlice(txns)

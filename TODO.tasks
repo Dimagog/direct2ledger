@@ -1,0 +1,8 @@
+
+Archive:
+  ✔ Get rid of parser.data @done(18-09-30 18:38) @project(Internal Improvements)
+  ✔ Extract accounts using `ledger accounts` @done(18-09-30 18:38) @project(Internal Improvements)
+  ✘ Or better yet add accounts on the fly while processing ledger file @cancelled(18-09-30 18:38) @project(Internal Improvements)
+  ✔ Do stream processing of converted journal CSV instead of `Cmd.Output` @done(18-09-30 18:38) @project(Internal Improvements)
+  ✔ Instead of `os.Create` for output file use `os.Open` with proper flags (no truncate) @done(18-09-30 10:17) @project(Internal Improvements)
+

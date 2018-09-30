@@ -62,7 +62,6 @@ func download(bank *bank, acc *account) *ofxgo.Response {
 			Include: true,
 		}
 		query.Bank = append(query.Bank, &statementRequest)
-		break
 	case ofxgo.AcctTypeCreditLine:
 		statementRequest := ofxgo.CCStatementRequest{
 			TrnUID: *uid,
@@ -72,7 +71,6 @@ func download(bank *bank, acc *account) *ofxgo.Response {
 			Include: true,
 		}
 		query.CreditCard = append(query.CreditCard, &statementRequest)
-		break
 	default:
 		log.Fatalf("Unsupported account type %s", acctType.String())
 	}
