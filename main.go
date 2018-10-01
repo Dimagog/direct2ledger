@@ -93,7 +93,13 @@ type account struct {
 	Type   string
 }
 
+type txnhash [sha256.Size]byte
+
 type txn struct {
+	// Transaction ID
+	// NOTE: FITIDs are not unique accross FIs,
+	// so reported FITID is prepended with account name.
+	TID          string
 	Date         time.Time
 	BankDesc     string
 	MintDesc     string
@@ -102,8 +108,26 @@ type txn struct {
 	From         string
 	Amount       float64
 	Currency     string
-	Key          []byte
 	Done         bool
+	fromJournal  bool
+	hash         *txnhash
+}
+
+// NOT thread-safe
+func (t *txn) Hash() *txnhash {
+	if t.hash == nil {
+		// Have a unique key for each transaction in so we can uniquely identify and
+		// persist them.
+		h := sha256.New()
+		fmt.Fprintf(h, "%s\n%s\n%.2f\n%s", t.Date.Format(stamp), t.BankDesc, t.Amount, t.Currency)
+		t.hash = &txnhash{}
+		h.Sum(t.hash[:0])
+	}
+	return t.hash
+}
+
+func (t *txn) isFromJournal() bool {
+	return t.fromJournal
 }
 
 func (t *txn) getKnownAccount() string {
@@ -176,10 +200,30 @@ type parser struct {
 	classes  []bayesian.Class
 	cl       *bayesian.Classifier
 	accounts []string
+
+	// A bag of transactions.
+	// It's not a set because transaction with same fields
+	// can happen multiple times.
+	knownTxns map[txnhash]int
+
+	// A set of known transaction IDs (as reported by FI)
+	// NOTE: FITIDs are not unique accross FIs,
+	// so reported FITID is prepended with account name.
+	knownTIDs map[string]bool
 }
 
-func (p *parser) parseTransactions() {
+func newParser(db *bolt.DB) parser {
+	return parser{
+		db:        db,
+		knownTxns: make(map[txnhash]int),
+		knownTIDs: make(map[string]bool),
+	}
+}
+
+func (p *parser) parseTransactions(tch chan<- *txn) {
 	const errText = "Unable to convert journal to csv. Possibly an issue with your ledger installation."
+
+	defer close(tch)
 
 	cmd := exec.Command("ledger", "-f", ledgerFile, "csv")
 	out, err := cmd.StdoutPipe()
@@ -188,7 +232,6 @@ func (p *parser) parseTransactions() {
 	checkf(err, errText)
 
 	r := csv.NewReader(newConverter(out))
-	var t txn
 	for {
 		cols, err := r.Read()
 		if err == io.EOF {
@@ -196,7 +239,7 @@ func (p *parser) parseTransactions() {
 		}
 		checkf(err, "Unable to read a csv line.")
 
-		t = txn{}
+		t := txn{fromJournal: true}
 		t.Date, err = time.Parse(stamp, cols[0])
 		checkf(err, "Unable to parse time: %v", cols[0])
 		t.BankDesc = strings.Trim(cols[2], " \n\t")
@@ -216,14 +259,14 @@ func (p *parser) parseTransactions() {
 			t.MintCategory = normalizeWhitespace(comment[1])
 		}
 
-		p.txns = append(p.txns, t)
+		tch <- &t
 	}
 
 	err = cmd.Wait()
 	checkf(err, errText)
 }
 
-func (p *parser) parseAccounts() {
+func (p *parser) readAccounts() {
 	const errText = "Unable to extract accounts from journal. Possibly an issue with your ledger installation."
 
 	cmd := exec.Command("ledger", "-f", ledgerFile, "accounts")
@@ -245,18 +288,10 @@ func (p *parser) parseAccounts() {
 	checkf(err, errText)
 }
 
-func (p *parser) generateClasses() {
-	p.classes = make([]bayesian.Class, 0, 10)
-	tomap := make(map[string]bool)
-	for _, t := range p.txns {
-		tomap[t.To] = true
-	}
-	for _, a := range p.accounts {
-		tomap[a] = true
-	}
-
-	for to := range tomap {
-		p.classes = append(p.classes, bayesian.Class(to))
+func (p *parser) prepareTraining() {
+	p.classes = make([]bayesian.Class, 0, len(p.accounts))
+	for _, acc := range p.accounts {
+		p.classes = append(p.classes, bayesian.Class(acc))
 	}
 	assertf(len(p.classes) > 1, "Expected some categories. Found none.")
 
@@ -266,16 +301,21 @@ func (p *parser) generateClasses() {
 		p.cl = bayesian.NewClassifier(p.classes...)
 	}
 	assertf(p.cl != nil, "Expected a valid classifier. Found nil.")
-	for _, t := range p.txns {
-		if _, has := tomap[t.To]; !has {
-			continue
-		}
-		p.cl.Learn(t.getTerms(), bayesian.Class(t.To))
-	}
+}
 
+func (p *parser) train(t *txn) {
+	p.cl.Learn(t.getTerms(), bayesian.Class(t.To))
+	p.knownTxns[*t.Hash()]++
+	p.knownTIDs[t.TID] = true
+}
+
+func (p *parser) finishTraining() {
 	if *tfidf {
 		p.cl.ConvertTermsFreqToTfIdf()
 	}
+	// train method would populate empty string key for txns with no TID assigned,
+	// but we don't want to consider them known.
+	delete(p.knownTIDs, "")
 }
 
 type pair struct {
@@ -297,10 +337,6 @@ func (b byScore) Swap(i int, j int) {
 
 var trimWhitespace = regexp.MustCompile(`^[\s]+|[\s}]+$`)
 var dedupWhitespace = regexp.MustCompile(`[\s]{2,}`)
-
-func (t *txn) isFromJournal() bool {
-	return t.Key == nil
-}
 
 func normalizeWhitespace(s string) string {
 	s = trimWhitespace.ReplaceAllString(s, "")
@@ -459,10 +495,9 @@ func parseDescription(col string) (string, bool) {
 func (p *parser) parseTransactionsFromCSV(in []byte) []txn {
 	result := make([]txn, 0, 100)
 	r := csv.NewReader(bytes.NewReader(in))
-	var t txn
 	var skipped int
 	for {
-		t = txn{Currency: *currency}
+		t := txn{fromJournal: false, Currency: *currency}
 		cols, err := r.Read()
 		if err == io.EOF {
 			break
@@ -513,16 +548,10 @@ func (p *parser) parseTransactionsFromCSV(in []byte) []txn {
 			t.setKnownAccount(acc)
 		}
 
-		// Have a unique key for each transaction in CSV, so we can uniquely identify and
-		// persist them as we modify their category.
-		hash := sha256.New()
-		fmt.Fprintf(hash, "%s\t%s\t%.2f", t.Date.Format(stamp), t.BankDesc, t.Amount)
-		t.Key = hash.Sum(nil)
-
 		// check if it was reconciled before (in case we are restarted after a crash)
 		p.db.View(func(tx *bolt.Tx) error {
 			b := tx.Bucket(bucketName)
-			v := b.Get(t.Key)
+			v := b.Get(t.Hash()[:])
 			if v != nil {
 				dec := gob.NewDecoder(bytes.NewBuffer(v))
 				var td txn
@@ -643,7 +672,7 @@ func printSummary(t *txn, idx, total int) {
 
 	color.New(color.BgRed, color.FgWhite).Printf(" %9.2f %3s ", t.Amount, t.Currency)
 	if *debug {
-		fmt.Printf(" hash: %s", hex.EncodeToString(t.Key))
+		fmt.Printf(" hash: %s", hex.EncodeToString(t.Hash()[:]))
 	}
 	fmt.Println()
 }
@@ -658,7 +687,7 @@ func (p *parser) writeToDB(t txn) {
 		var val bytes.Buffer
 		enc := gob.NewEncoder(&val)
 		checkf(enc.Encode(t), "Unable to encode txn: %v", t)
-		return b.Put(t.Key, val.Bytes())
+		return b.Put(t.Hash()[:], val.Bytes())
 
 	}); err != nil {
 		log.Fatalf("Write to db failed with error: %v", err)
@@ -740,7 +769,7 @@ func (p *parser) printAndGetResult(hits []bayesian.Class, t *txn) int {
 			t.Done = false
 			p.db.Update(func(tx *bolt.Tx) error {
 				b := tx.Bucket(bucketName)
-				b.Delete(t.Key)
+				b.Delete(t.Hash()[:])
 				return nil
 			})
 			return 1
@@ -1020,12 +1049,18 @@ func main() {
 	of, err := os.OpenFile(*output, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	checkf(err, "Unable to open output file: %v", *output)
 
-	p := parser{db: db}
-	p.parseAccounts()
-	p.parseTransactions()
+	p := newParser(db)
+	p.readAccounts()
 
-	// Scanning done. Now train classifier.
-	p.generateClasses()
+	tch := make(chan *txn, 100)
+	go p.parseTransactions(tch)
+
+	// Train classifier.
+	p.prepareTraining()
+	for t := range tch {
+		p.train(t)
+	}
+	p.finishTraining()
 
 	var txns []txn // TODO: download txns here
 	txns = removePendingTransactions(txns)
@@ -1040,7 +1075,7 @@ func main() {
 
 	p.showAndCategorizeTxns(txns)
 
-	_, err = of.WriteString(fmt.Sprintf("; direct2ledger run at %v\n\n", time.Now().Format("2006-01-02 15:04:05 MST")))
+	_, err = fmt.Fprintf(of, "; direct2ledger run at %v\n\n", time.Now().Format("2006-01-02 15:04:05 MST"))
 	checkf(err, "Unable to write into output file: %v", of.Name())
 
 	for _, t := range txns {
