@@ -57,12 +57,10 @@ var (
 
 	ledgerFile = ""
 
-	rtxn   = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
-	rto    = regexp.MustCompile(`\W*([:\w]+)(.*)`)
-	rfrom  = regexp.MustCompile(`\W*([:\w]+).*`)
-	rcur   = regexp.MustCompile(`(\d+\.\d+|\d+)`)
-	racc   = regexp.MustCompile(`^account[\W]+(.*)`)
-	ralias = regexp.MustCompile(`\balias\s(.*)`)
+	rtxn  = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
+	rto   = regexp.MustCompile(`\W*([:\w]+)(.*)`)
+	rfrom = regexp.MustCompile(`\W*([:\w]+).*`)
+	rcur  = regexp.MustCompile(`(\d+\.\d+|\d+)`)
 
 	stamp      = "2006/01/02"
 	bucketName = []byte("txns")
@@ -96,10 +94,8 @@ type account struct {
 type txnhash [sha256.Size]byte
 
 type txn struct {
-	// Transaction ID
-	// NOTE: FITIDs are not unique accross FIs,
-	// so reported FITID is prepended with account name.
-	TID          string
+	// NOTE: FITIDs are not unique accross FIs
+	FITID        string
 	Date         time.Time
 	BankDesc     string
 	MintDesc     string
@@ -119,7 +115,15 @@ func (t *txn) Hash() *txnhash {
 		// Have a unique key for each transaction in so we can uniquely identify and
 		// persist them.
 		h := sha256.New()
-		fmt.Fprintf(h, "%s\n%s\n%.2f\n%s", t.Date.Format(stamp), t.BankDesc, t.Amount, t.Currency)
+		// fmt.Printf("Hashing: %s\n%s\n%.32s\n%.2f\n%s",
+		// 	t.getKnownAccount(), t.Date.Format(stamp), t.BankDesc, t.Amount, t.Currency)
+		desc := t.BankDesc
+		const maxHashableDesc = 30
+		if len(desc) > maxHashableDesc {
+			desc = strings.Trim(desc[:maxHashableDesc], " \t")
+		}
+		fmt.Fprintf(h, "%s\n%s\n%.30s\n%.2f\n%s",
+			t.getKnownAccount(), t.Date.Format(stamp), desc, t.Amount, t.Currency)
 		t.hash = &txnhash{}
 		h.Sum(t.hash[:0])
 	}
@@ -131,10 +135,18 @@ func (t *txn) isFromJournal() bool {
 }
 
 func (t *txn) getKnownAccount() string {
-	if t.Amount >= 0 {
+	if t.fromJournal || t.Amount >= 0 {
 		return t.To
 	}
 	return t.From
+}
+
+func (t *txn) isToKnown() bool {
+	return t.Amount >= 0
+}
+
+func (t *txn) isFromKnown() bool {
+	return t.Amount < 0
 }
 
 func (t *txn) getPairAccount() string {
@@ -220,7 +232,9 @@ func newParser(db *bolt.DB) parser {
 	}
 }
 
-func (p *parser) parseTransactions(tch chan<- *txn) {
+var reFITIDtag = regexp.MustCompile(`\WFITID:\s*(\S+)`)
+
+func (p *parser) parseJournalTransactions(tch chan<- *txn) {
 	const errText = "Unable to convert journal to csv. Possibly an issue with your ledger installation."
 
 	defer close(tch)
@@ -240,9 +254,13 @@ func (p *parser) parseTransactions(tch chan<- *txn) {
 		checkf(err, "Unable to read a csv line.")
 
 		t := txn{fromJournal: true}
+
 		t.Date, err = time.Parse(stamp, cols[0])
 		checkf(err, "Unable to parse time: %v", cols[0])
-		t.BankDesc = strings.Trim(cols[2], " \n\t")
+
+		// TODO: Decide if ledger descriptions should be cleaned up
+		// t.BankDesc = strings.Trim(cols[2], " \n\t")
+		t.BankDesc = cleanupDesc(cols[2])
 
 		t.To = cols[3]
 		assertf(len(t.To) > 0, "Expected TO, found empty.")
@@ -251,12 +269,13 @@ func (p *parser) parseTransactions(tch chan<- *txn) {
 		t.Amount, err = strconv.ParseFloat(cols[5], 64)
 		checkf(err, "Unable to parse amount.")
 
-		comment := strings.Split(cols[7], ";")
-		if len(comment) > 0 {
-			t.MintDesc = normalizeWhitespace(comment[0])
-		}
-		if len(comment) > 1 {
-			t.MintCategory = normalizeWhitespace(comment[1])
+		{
+			meta := cols[7]
+			matches := reFITIDtag.FindStringSubmatch(meta)
+			assertf(len(matches) <= 2, "Multiple FITIDs: %s", meta)
+			if len(matches) == 2 {
+				t.FITID = matches[1]
+			}
 		}
 
 		tch <- &t
@@ -306,16 +325,16 @@ func (p *parser) prepareTraining() {
 func (p *parser) train(t *txn) {
 	p.cl.Learn(t.getTerms(), bayesian.Class(t.To))
 	p.knownTxns[*t.Hash()]++
-	p.knownTIDs[t.TID] = true
+	if t.FITID != "" {
+		tid := formatTid(t.To, t.FITID)
+		p.knownTIDs[tid] = true
+	}
 }
 
 func (p *parser) finishTraining() {
 	if *tfidf {
 		p.cl.ConvertTermsFreqToTfIdf()
 	}
-	// train method would populate empty string key for txns with no TID assigned,
-	// but we don't want to consider them known.
-	delete(p.knownTIDs, "")
 }
 
 type pair struct {
@@ -492,80 +511,87 @@ func parseDescription(col string) (string, bool) {
 	}, col), true
 }
 
-func (p *parser) parseTransactionsFromCSV(in []byte) []txn {
+func (p *parser) downloadAndParseNewTransactions() []txn {
 	result := make([]txn, 0, 100)
-	r := csv.NewReader(bytes.NewReader(in))
-	var skipped int
-	for {
-		t := txn{fromJournal: false, Currency: *currency}
-		cols, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		checkf(err, "Unable to read line: %v", strings.Join(cols, ", "))
-		if *skip > skipped {
-			skipped++
-			continue
-		}
 
-		assertf(len(cols) == 9, "Mint export has unexpected number of columns %d", len(cols))
+	for _, bank := range config.Banks {
+		for _, acc := range bank.Accounts {
+			// resp := readOFX("test.ofx")
+			resp := downloadOFX(&bank, &acc)
 
-		{
-			date, ok := parseDate(cols[0])
-			assertf(ok, "Cannot parse date: %s", cols[0])
-			y, m, d := date.Year(), date.Month(), date.Day()
-			t.Date = time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
-		}
-		assertf(!t.Date.IsZero(), "Invalid date for %v", cols)
+			meaning, _ := resp.Signon.Status.CodeMeaning()
+			assertf(resp.Signon.Status.Code == 0, "Signon failed: %s", meaning)
 
-		t.MintDesc = cols[1]
+			var (
+				balanceAmount   ofxgo.Amount
+				defaultCurrency ofxgo.CurrSymbol
+				statementDate   ofxgo.Date
+				transactions    []ofxgo.Transaction
+			)
 
-		t.BankDesc = dedupDescription(cols[2])
-		assertf(len(t.BankDesc) != 0, "No description for %v", cols)
-
-		{
-			amt, ok := parseAmount(cols[3])
-			assertf(ok, "Cannot parse amount: %s", cols[2])
-			if *inverseSign {
-				amt = -amt
-			}
-			if cols[4] == "debit" {
-				amt = -amt
+			if len(resp.Bank) > 0 {
+				if stmt, ok := resp.Bank[0].(*ofxgo.StatementResponse); ok {
+					balanceAmount = stmt.BalAmt
+					defaultCurrency = stmt.CurDef
+					statementDate = stmt.DtAsOf
+					transactions = stmt.BankTranList.Transactions
+				}
+			} else if len(resp.CreditCard) > 0 {
+				if stmt, ok := resp.CreditCard[0].(*ofxgo.CCStatementResponse); ok {
+					balanceAmount = stmt.BalAmt
+					defaultCurrency = stmt.CurDef
+					statementDate = stmt.DtAsOf
+					transactions = stmt.BankTranList.Transactions
+				}
 			} else {
-				assertf(cols[4] == "credit", "Expected debit or credit, got: %s", cols[4])
+				assertf(false, "No messages received")
 			}
-			t.Amount = amt
-		}
-		assertf(t.Amount != 0.0, "Zero amount for %v", cols)
-
-		t.MintCategory = cols[5]
-
-		{
-			acc := cols[6]
-			// acc = accMap.Rename[acc]
-			// assertf(acc != "", "Cannot find mapping for account %s", cols[6])
-
-			t.setKnownAccount(acc)
-		}
-
-		// check if it was reconciled before (in case we are restarted after a crash)
-		p.db.View(func(tx *bolt.Tx) error {
-			b := tx.Bucket(bucketName)
-			v := b.Get(t.Hash()[:])
-			if v != nil {
-				dec := gob.NewDecoder(bytes.NewBuffer(v))
-				var td txn
-				if err := dec.Decode(&td); err == nil {
-					t.setPairAccount(td.getPairAccount())
-					t.Done = true
+			fmt.Printf("Balance for %s: %s %s (as of %s)\n", acc.Name, balanceAmount, defaultCurrency, statementDate)
+			for _, tran := range transactions {
+				t := p.parseBankTransaction(acc.Name, defaultCurrency, &tran)
+				if t != nil {
+					result = append(result, *t)
 				}
 			}
-			return nil
-		})
-
-		result = append(result, t)
+		}
 	}
 	return result
+}
+
+var descGarbage = regexp.MustCompile(`^Ext Credit Card (Credit|Debit)(--)?`)
+
+// var descRemoveSymbols = regexp.MustCompile(`[#.*-]`)
+
+func cleanupDesc(desc string) string {
+	if *debug {
+		fmt.Printf("Desc FROM: %s\n", desc)
+	}
+	d := descGarbage.ReplaceAllLiteralString(desc, "")
+	if d != "" {
+		desc = d
+	}
+	// desc = descRemoveSymbols.ReplaceAllLiteralString(desc, "")
+	desc = normalizeWhitespace(desc)
+	if *debug {
+		fmt.Printf("Desc TO  : %s\n\n", desc)
+	}
+	return desc
+}
+
+func extractDescription(t *ofxgo.Transaction) string {
+	var desc string
+	name := t.Name.String()
+	memo := t.Memo.String()
+
+	if strings.Contains(memo, name) {
+		desc = memo
+	} else {
+		desc = fmt.Sprintf("%s %s", name, memo)
+	}
+	if t.CheckNum != "" {
+		desc += " " + t.CheckNum.String()
+	}
+	return cleanupDesc(desc)
 }
 
 func dedupDescription(desc string) string {
@@ -867,20 +893,43 @@ func (p *parser) showAndCategorizeTxns(txns []txn) {
 	}
 }
 
-func ledgerFormat(t txn) string {
-	var b bytes.Buffer
-	b.WriteString(fmt.Sprintf("%s %s\n", t.Date.Format(stamp), t.BankDesc))
-	if t.MintDesc != "" || t.MintCategory != "" {
-		b.WriteString(fmt.Sprintf("\t; %s ; %s\n", t.MintDesc, t.MintCategory))
+func ledgerFormat(out io.Writer, t txn) error {
+	_, err := fmt.Fprintf(out, "%s %s\n", t.Date.Format(stamp), t.BankDesc)
+	if err != nil {
+		return err
 	}
-	b.WriteString(fmt.Sprintf("\t%-20s \t", t.To))
+
+	_, err = fmt.Fprintf(out, "\t%-20s \t", t.To)
+	if err != nil {
+		return err
+	}
+
 	if len([]rune(t.Currency)) <= 1 {
-		b.WriteString(fmt.Sprintf("%s%.2f\n", t.Currency, math.Abs(t.Amount)))
+		_, err = fmt.Fprintf(out, "%s%.2f\n", t.Currency, math.Abs(t.Amount))
 	} else {
-		b.WriteString(fmt.Sprintf("%.2f %s\n", math.Abs(t.Amount), t.Currency))
+		_, err = fmt.Fprintf(out, "%.2f %s\n", math.Abs(t.Amount), t.Currency)
 	}
-	b.WriteString(fmt.Sprintf("\t%s\n\n", t.From))
-	return b.String()
+	if err != nil {
+		return err
+	}
+	if t.isToKnown() {
+		_, err = fmt.Fprintf(out, "\t; FITID: %s\n", t.FITID)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(out, "\t%s\n", t.From)
+	if err != nil {
+		return err
+	}
+	if t.isFromKnown() {
+		_, err = fmt.Fprintf(out, "\t; FITID: %s\n", t.FITID)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintln(out)
+	return err
 }
 
 func sanitize(a string) string {
@@ -1002,35 +1051,6 @@ func main() {
 		dec := yaml.NewDecoder(f)
 		err = dec.Decode(&config)
 		checkf(err, "Cannot read accounts")
-		// for _, bank := range config.Banks {
-		// 	for _, acc := range bank.Accounts {
-		// 		resp := download(&bank, &acc)
-
-		// 		meaning, _ := resp.Signon.Status.CodeMeaning()
-		// 		assertf(resp.Signon.Status.Code == 0, "Signon failed: %s", meaning)
-
-		// 		if len(resp.Bank) > 0 {
-		// 			if stmt, ok := resp.Bank[0].(*ofxgo.StatementResponse); ok {
-		// 				fmt.Printf("Balance: %s %s (as of %s)\n", stmt.BalAmt, stmt.CurDef, stmt.DtAsOf)
-		// 				fmt.Println("Transactions:")
-		// 				for _, tran := range stmt.BankTranList.Transactions {
-		// 					printTransaction(stmt.CurDef, &tran)
-		// 				}
-		// 			}
-		// 		} else if len(resp.CreditCard) > 0 {
-		// 			if stmt, ok := resp.CreditCard[0].(*ofxgo.CCStatementResponse); ok {
-		// 				fmt.Printf("Balance: %s %s (as of %s)\n", stmt.BalAmt, stmt.CurDef, stmt.DtAsOf)
-		// 				fmt.Println("Transactions:")
-		// 				for _, tran := range stmt.BankTranList.Transactions {
-		// 					printTransaction(stmt.CurDef, &tran)
-		// 				}
-		// 			}
-		// 		} else {
-		// 			assertf(false, "No messages received")
-		// 		}
-		// 	}
-		// }
-		// os.Exit(0)
 	}
 
 	tf := path.Join(os.TempDir(), "ledger-csv-txns")
@@ -1053,7 +1073,7 @@ func main() {
 	p.readAccounts()
 
 	tch := make(chan *txn, 100)
-	go p.parseTransactions(tch)
+	go p.parseJournalTransactions(tch)
 
 	// Train classifier.
 	p.prepareTraining()
@@ -1062,8 +1082,7 @@ func main() {
 	}
 	p.finishTraining()
 
-	var txns []txn // TODO: download txns here
-	txns = removePendingTransactions(txns)
+	txns := p.downloadAndParseNewTransactions()
 	if *reverseCSV {
 		reverseSlice(txns)
 	}
@@ -1080,7 +1099,7 @@ func main() {
 
 	for _, t := range txns {
 		if t.Done {
-			if _, err := of.WriteString(ledgerFormat(t)); err != nil {
+			if err := ledgerFormat(of, t); err != nil {
 				log.Fatalf("Unable to write to output: %v", err)
 			}
 		}
@@ -1088,21 +1107,103 @@ func main() {
 	checkf(of.Close(), "Unable to close output file: %v", of.Name())
 }
 
-func removePendingTransactions(txns []txn) []txn {
-	if !*allowPending && len(txns) > 0 {
-		lastDate := txns[0].Date
-		for i, t := range txns {
-			if t.Date.After(lastDate) {
-				for j := 0; j < i; j++ {
-					printSummary(&txns[j], 0, -1)
-				}
-				fmt.Printf("\t%d pending transactions were ignored.\n\n", i)
-				return txns[i:]
+func translateCurrency(cur string) string {
+	switch cur {
+	case "USD":
+		return "$"
+	default:
+		return cur
+	}
+}
+
+func formatTid(account, FITID string) string {
+	return fmt.Sprintf("%s\n%s", account, FITID)
+}
+
+var loc *time.Location
+
+func init() {
+	var err error
+	loc, err = time.LoadLocation("US/Pacific")
+	checkf(err, "Cannot load timezone info")
+}
+
+func (p *parser) parseBankTransaction(accName string, defCurrency ofxgo.CurrSymbol, tran *ofxgo.Transaction) *txn {
+	amount, _ := tran.TrnAmt.Float64()
+	if amount == 0 {
+		// Discover reports some bogus 0-amount txns
+		return nil
+	}
+
+	printTransaction(defCurrency, tran)
+
+	tid := formatTid(accName, tran.FiTID.String())
+
+	if _, known := p.knownTIDs[tid]; known {
+		return nil
+	}
+
+	t := txn{fromJournal: false, FITID: tran.FiTID.String()}
+
+	{
+		cur := defCurrency
+		if _, err := tran.Currency.CurSym.Valid(); err == nil {
+			cur = tran.Currency.CurSym
+		}
+		t.Currency = translateCurrency(cur.String())
+	}
+
+	{
+		date1 := tran.DtPosted
+		date := date1.Truncate(24 * time.Hour)
+		if strings.HasSuffix(accName, ":FirstTech:Mastercard") {
+			// dateGlitchStart := time.Date(2018, 8, 28, 0, 0, 0, 0, time.UTC)
+			dateGlitchEnd := time.Date(2018, 9, 12, 0, 0, 0, 0, time.UTC)
+			// if date.Before(dateGlitchStart) || date.After(dateGlitchEnd) {
+			if date.After(dateGlitchEnd) {
+				date = date.In(loc)
 			}
-			lastDate = t.Date
+		}
+		y, m, d := date.Year(), date.Month(), date.Day()
+		t.Date = time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+		assertf(!t.Date.IsZero(), "Invalid date for %+v", tran)
+	}
+
+	t.BankDesc = extractDescription(tran)
+	assertf(len(t.BankDesc) != 0, "No description for %+v", tran)
+
+	if *inverseSign {
+		amount = -amount
+	}
+	t.Amount = amount
+	assertf(t.Amount != 0.0, "Zero amount for %+v", tran)
+
+	t.setKnownAccount(accName)
+
+	{
+		hash := t.Hash()
+		if p.knownTxns[*hash] > 0 {
+			p.knownTxns[*hash]--
+			return nil
 		}
 	}
-	return txns
+
+	// check if it was reconciled before (in case we are restarted after a crash)
+	p.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketName)
+		v := b.Get(t.Hash()[:])
+		if v != nil {
+			dec := gob.NewDecoder(bytes.NewBuffer(v))
+			var td txn
+			if err := dec.Decode(&td); err == nil {
+				t.setPairAccount(td.getPairAccount())
+				t.Done = true
+			}
+		}
+		return nil
+	})
+
+	return &t
 }
 
 func printTransaction(defCurrency ofxgo.CurrSymbol, tran *ofxgo.Transaction) {
@@ -1122,5 +1223,5 @@ func printTransaction(defCurrency ofxgo.CurrSymbol, tran *ofxgo.Transaction) {
 		name = name + " - " + string(tran.Memo)
 	}
 
-	fmt.Printf("%s %-15s %-11s %s\n", tran.DtPosted, tran.TrnAmt.String()+" "+currency.String(), tran.TrnType, name)
+	fmt.Printf("%s %-15s %-11s %s\t%s\n", tran.DtPosted, tran.TrnAmt.String()+" "+currency.String(), tran.TrnType, name, tran.FiTID.String())
 }

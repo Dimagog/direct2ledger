@@ -2,7 +2,9 @@ package main
 
 import (
 	"log"
+	"os"
 	"strconv"
+	"time"
 
 	"github.com/dimagog/ofxgo"
 )
@@ -41,7 +43,16 @@ func translateAccountType(accType string) string {
 	}
 }
 
-func download(bank *bank, acc *account) *ofxgo.Response {
+func readOFX(fileName string) *ofxgo.Response {
+	file, err := os.Open(fileName)
+	checkf(err, "Cannot open OFX file %s", fileName)
+	defer file.Close()
+	response, err := ofxgo.ParseResponse(file)
+	checkf(err, "Cannot parse OFX file %s", fileName)
+	return response
+}
+
+func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 	client, query := newRequest(bank, acc)
 
 	acctType, err := ofxgo.NewAcctType(translateAccountType(acc.Type))
@@ -49,6 +60,12 @@ func download(bank *bank, acc *account) *ofxgo.Response {
 
 	uid, err := ofxgo.RandomUID()
 	checkf(err, "Error creating UID for transaction")
+
+	const day = 24 * time.Hour
+	lookBack := 30
+	startDate := time.Now().Add(-time.Duration(lookBack) * day).Truncate(day)
+	// startDate = time.Date(2018, 9, 1, 0, 0, 0, 0, time.UTC)
+	dtStart := &ofxgo.Date{Time: startDate}
 
 	switch acctType {
 	case ofxgo.AcctTypeChecking, ofxgo.AcctTypeSavings:
@@ -59,6 +76,7 @@ func download(bank *bank, acc *account) *ofxgo.Response {
 				AcctID:   ofxgo.String(acc.AcctID),
 				AcctType: acctType,
 			},
+			DtStart: dtStart,
 			Include: true,
 		}
 		query.Bank = append(query.Bank, &statementRequest)
@@ -68,6 +86,7 @@ func download(bank *bank, acc *account) *ofxgo.Response {
 			CCAcctFrom: ofxgo.CCAcct{
 				AcctID: ofxgo.String(acc.AcctID),
 			},
+			DtStart: dtStart,
 			Include: true,
 		}
 		query.CreditCard = append(query.CreditCard, &statementRequest)

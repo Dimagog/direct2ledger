@@ -1,3 +1,22 @@
+Now:
+✔ Download txns @done(18-10-02 15:46)
+✔ Parse downloaded txns @done(18-10-02 15:46)
+☐ Fix `removeDuplicates`
+  ✔ Better yet remove duplicates while processing downloaded txns @done(18-10-02 15:46)
+  ☐ Print duplicate txns
+✔ Put FITID into generated journal @done(18-10-02 16:10)
+✔ Parse FITID from journal @done(18-10-02 16:25)
+☐ Control startDate or how many days back to download
+
+Soon:
+☐ Proper implementation for reading OFX from file
+☐ Change `[]txn` to `[]*txn`
+☐ Storing amounts as `float` is imprecise
+☐ Automatically detect how many days to download
+☐ Only store TIDs of txns within downloaded date range 9with some slack)
+
+Later:
+  ☐ Download txns in parallel
 
 Archive:
   ✔ Stream-processing of journal @done(18-10-01 10:25)
