@@ -86,15 +86,16 @@ type bank struct {
 }
 
 type account struct {
-	Name   string
-	AcctID string
-	Type   string
+	Name           string
+	AcctID         string
+	Type           string
+	DateAdjustment time.Duration
 }
 
 type txnhash [sha256.Size]byte
 
 type txn struct {
-	// NOTE: FITIDs are not unique accross FIs
+	// NOTE: FITIDs are not unique across FIs
 	FITID        string
 	Date         time.Time
 	BankDesc     string
@@ -234,7 +235,36 @@ func newParser(db *bolt.DB) parser {
 
 var reFITIDtag = regexp.MustCompile(`\WFITID:\s*(\S+)`)
 
-func (p *parser) parseJournalTransactions(tch chan<- *txn) {
+func parseJournalTransaction(cols []string) *txn {
+	t := txn{fromJournal: true}
+
+	var err error
+	t.Date, err = time.Parse(stamp, cols[0])
+	checkf(err, "Unable to parse time: %v", cols[0])
+
+	// TODO: Decide if ledger descriptions should be cleaned up
+	// t.BankDesc = strings.Trim(cols[2], " \n\t")
+	t.BankDesc = cleanupDesc(cols[2])
+
+	t.To = cols[3]
+	assertf(len(t.To) > 0, "Expected TO, found empty.")
+
+	t.Currency = cols[4]
+	t.Amount, err = strconv.ParseFloat(cols[5], 64)
+	checkf(err, "Unable to parse amount.")
+
+	{
+		meta := cols[7]
+		matches := reFITIDtag.FindStringSubmatch(meta)
+		assertf(len(matches) <= 2, "Multiple FITIDs: %s", meta)
+		if len(matches) == 2 {
+			t.FITID = matches[1]
+		}
+	}
+	return &t
+}
+
+func parseJournalTransactions(tch chan<- *txn) {
 	const errText = "Unable to convert journal to csv. Possibly an issue with your ledger installation."
 
 	defer close(tch)
@@ -253,32 +283,7 @@ func (p *parser) parseJournalTransactions(tch chan<- *txn) {
 		}
 		checkf(err, "Unable to read a csv line.")
 
-		t := txn{fromJournal: true}
-
-		t.Date, err = time.Parse(stamp, cols[0])
-		checkf(err, "Unable to parse time: %v", cols[0])
-
-		// TODO: Decide if ledger descriptions should be cleaned up
-		// t.BankDesc = strings.Trim(cols[2], " \n\t")
-		t.BankDesc = cleanupDesc(cols[2])
-
-		t.To = cols[3]
-		assertf(len(t.To) > 0, "Expected TO, found empty.")
-
-		t.Currency = cols[4]
-		t.Amount, err = strconv.ParseFloat(cols[5], 64)
-		checkf(err, "Unable to parse amount.")
-
-		{
-			meta := cols[7]
-			matches := reFITIDtag.FindStringSubmatch(meta)
-			assertf(len(matches) <= 2, "Multiple FITIDs: %s", meta)
-			if len(matches) == 2 {
-				t.FITID = matches[1]
-			}
-		}
-
-		tch <- &t
+		tch <- parseJournalTransaction(cols)
 	}
 
 	err = cmd.Wait()
@@ -354,12 +359,12 @@ func (b byScore) Swap(i int, j int) {
 	b[i], b[j] = b[j], b[i]
 }
 
-var trimWhitespace = regexp.MustCompile(`^[\s]+|[\s}]+$`)
-var dedupWhitespace = regexp.MustCompile(`[\s]{2,}`)
+var trimWhitespace = regexp.MustCompile(`^\s+|\s+$`)
+var dedupWhitespace = regexp.MustCompile(`\s+`)
 
 func normalizeWhitespace(s string) string {
 	s = trimWhitespace.ReplaceAllString(s, "")
-	s = dedupWhitespace.ReplaceAllString(s, " ")
+	s = dedupWhitespace.ReplaceAllString(s, " ") // also converts all whitespace to space
 	return s
 }
 
@@ -473,7 +478,7 @@ func (p *parser) topHits(t *txn) []bayesian.Class {
 	}
 
 	sort.Sort(byScore(pairs))
-	result := make([]bayesian.Class, 0, 5)
+	result := make([]bayesian.Class, 0, 10)
 	last := pairs[0].score
 	for i := 0; i < mathex.Min(10, len(pairs)); i++ {
 		pr := pairs[i]
@@ -548,7 +553,7 @@ func (p *parser) downloadAndParseNewTransactions() []txn {
 			}
 			fmt.Printf("Balance for %s: %s %s (as of %s)\n", acc.Name, balanceAmount, defaultCurrency, statementDate)
 			for _, tran := range transactions {
-				t := p.parseBankTransaction(acc.Name, defaultCurrency, &tran)
+				t := p.parseBankTransaction(acc, defaultCurrency, &tran)
 				if t != nil {
 					result = append(result, *t)
 				}
@@ -558,7 +563,7 @@ func (p *parser) downloadAndParseNewTransactions() []txn {
 	return result
 }
 
-var descGarbage = regexp.MustCompile(`^Ext Credit Card (Credit|Debit)(--)?`)
+var descGarbage = regexp.MustCompile(`^((Ext Credit Card (Credit|Debit))|(Descriptive )?Withdrawal)(--)?`)
 
 // var descRemoveSymbols = regexp.MustCompile(`[#.*-]`)
 
@@ -570,8 +575,10 @@ func cleanupDesc(desc string) string {
 	if d != "" {
 		desc = d
 	}
-	// desc = descRemoveSymbols.ReplaceAllLiteralString(desc, "")
+	desc = strings.Replace(desc, "--", " ", 1)
+	// desc = descRemoveSymbols.ReplaceAllLiteralString(desc, " ")
 	desc = normalizeWhitespace(desc)
+	desc = dedupDescription(desc)
 	if *debug {
 		fmt.Printf("Desc TO  : %s\n\n", desc)
 	}
@@ -594,7 +601,8 @@ func extractDescription(t *ofxgo.Transaction) string {
 	return cleanupDesc(desc)
 }
 
-func dedupDescription(desc string) string {
+func dedupDescription(origDesc string) string {
+	desc := origDesc + " " // for cases like "abc abc", i.e. with space in between duplicates
 outer:
 	for j := len(desc) / 2; j > 3; j-- {
 		for i := 0; i < j; i++ {
@@ -604,12 +612,12 @@ outer:
 		}
 		// found the longest duplicate
 		if *debug {
-			fmt.Printf("Deduped from: %v\n", desc)
-			fmt.Printf("Deduped to:   %v\n", desc[j:])
+			fmt.Printf("Deduped from: %s\n", origDesc)
+			fmt.Printf("Deduped to:   %s\n", origDesc[j:])
 		}
-		return desc[j:]
+		return origDesc[j:]
 	}
-	return desc // no deduping
+	return origDesc // no deduping
 }
 
 func assignFor(opt string, cl bayesian.Class, keys map[rune]string) bool {
@@ -1073,7 +1081,7 @@ func main() {
 	p.readAccounts()
 
 	tch := make(chan *txn, 100)
-	go p.parseJournalTransactions(tch)
+	go parseJournalTransactions(tch)
 
 	// Train classifier.
 	p.prepareTraining()
@@ -1128,16 +1136,18 @@ func init() {
 	checkf(err, "Cannot load timezone info")
 }
 
-func (p *parser) parseBankTransaction(accName string, defCurrency ofxgo.CurrSymbol, tran *ofxgo.Transaction) *txn {
+func (p *parser) parseBankTransaction(acc account, defCurrency ofxgo.CurrSymbol, tran *ofxgo.Transaction) *txn {
 	amount, _ := tran.TrnAmt.Float64()
 	if amount == 0 {
 		// Discover reports some bogus 0-amount txns
 		return nil
 	}
 
-	printTransaction(defCurrency, tran)
+	if *debug {
+		printTransaction(defCurrency, tran)
+	}
 
-	tid := formatTid(accName, tran.FiTID.String())
+	tid := formatTid(acc.Name, tran.FiTID.String())
 
 	if _, known := p.knownTIDs[tid]; known {
 		return nil
@@ -1154,18 +1164,9 @@ func (p *parser) parseBankTransaction(accName string, defCurrency ofxgo.CurrSymb
 	}
 
 	{
-		date1 := tran.DtPosted
-		date := date1.Truncate(24 * time.Hour)
-		if strings.HasSuffix(accName, ":FirstTech:Mastercard") {
-			// dateGlitchStart := time.Date(2018, 8, 28, 0, 0, 0, 0, time.UTC)
-			dateGlitchEnd := time.Date(2018, 9, 12, 0, 0, 0, 0, time.UTC)
-			// if date.Before(dateGlitchStart) || date.After(dateGlitchEnd) {
-			if date.After(dateGlitchEnd) {
-				date = date.In(loc)
-			}
-		}
-		y, m, d := date.Year(), date.Month(), date.Day()
-		t.Date = time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+		ofxDate := tran.DtPosted
+		date := ofxDate.Add(acc.DateAdjustment)
+		t.Date = date.UTC().Truncate(24 * time.Hour)
 		assertf(!t.Date.IsZero(), "Invalid date for %+v", tran)
 	}
 
@@ -1178,7 +1179,7 @@ func (p *parser) parseBankTransaction(accName string, defCurrency ofxgo.CurrSymb
 	t.Amount = amount
 	assertf(t.Amount != 0.0, "Zero amount for %+v", tran)
 
-	t.setKnownAccount(accName)
+	t.setKnownAccount(acc.Name)
 
 	{
 		hash := t.Hash()

@@ -62,10 +62,12 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 	checkf(err, "Error creating UID for transaction")
 
 	const day = 24 * time.Hour
-	lookBack := 30
-	startDate := time.Now().Add(-time.Duration(lookBack) * day).Truncate(day)
-	// startDate = time.Date(2018, 9, 1, 0, 0, 0, 0, time.UTC)
+	// lookBack := 30
+	// startDate := time.Now().Add(-time.Duration(lookBack) * day).Truncate(day)
+	startDate := time.Date(2018, 10, 1, 0, 0, 0, 0, time.UTC)
 	dtStart := &ofxgo.Date{Time: startDate}
+	// endDate := time.Date(2018, 10, 1, 0, 0, 0, 0, time.UTC)
+	// dtEnd := &ofxgo.Date{Time: endDate}
 
 	switch acctType {
 	case ofxgo.AcctTypeChecking, ofxgo.AcctTypeSavings:
@@ -77,6 +79,7 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 				AcctType: acctType,
 			},
 			DtStart: dtStart,
+			// DtEnd:   dtEnd,
 			Include: true,
 		}
 		query.Bank = append(query.Bank, &statementRequest)
@@ -87,6 +90,7 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 				AcctID: ofxgo.String(acc.AcctID),
 			},
 			DtStart: dtStart,
+			// DtEnd:   dtEnd,
 			Include: true,
 		}
 		query.CreditCard = append(query.CreditCard, &statementRequest)

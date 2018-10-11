@@ -10,5 +10,6 @@ banks:
       - name: <Ledger account name, like Asset:Checking>
         acctid: <account ID>
         type: <should be SAVING or CHECKING or CREDIT/CREDITCARD/CREDITLINE>
+        dateadjustment: <optional adjustment for bank-reported transaction dates (added to DtPosted), for example -24h>
       - ... another account
   - ... another bank
