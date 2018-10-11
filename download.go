@@ -99,6 +99,6 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 	}
 
 	response, err := client.Request(query)
-	checkf(err, "Error downloading account statement")
+	checkf(err, "Error downloading account statement for %s", acc.Name)
 	return response
 }

@@ -1,15 +1,12 @@
 Now:
-  ☐ Download txns in parallel
 
 Soon:
-  ☐ Fix `removeDuplicates`
-    ☐ Print duplicate txns (only non-FITID-detected duplicates)
   ☐ Control startDate or how many days back to download (we know latest date for FITID-assigned transaction for each account)
   ☐ Change `[]txn` to `[]*txn`
   ☐ Automatically detect how many days to download
   ☐ Only store TIDs of txns within downloaded date range (with some slack)
   ☐ Switch back to official `ofxgo`
-  ☐ Cleanup unused options
+  ☐ Cleanup unused command line options
   ☐ Sort txns by the following tuple: (date, account, FITID)
 
 Later:
@@ -19,13 +16,16 @@ Later:
   ☐ Storing amounts as `float` is imprecise
 
 Archive:
+  ✔ Fix `removeDuplicates` @done(18-10-11 16:00) @project(Now)
+  ✔ Print duplicate txns (only non-FITID-detected duplicates) @done(18-10-11 16:00) @project(Now)
+  ✔ Download txns in parallel @done(18-10-11 15:52) @project(Now)
   ✔ Finalize cleanup of description @done(18-10-11 11:15) @project(Now)
+  ✔ Parse FITID from journal @done(18-10-02 16:25) @project(Now)
+  ✔ Stream-processing of journal @done(18-10-01 10:25)
   ✔ Download txns @done(18-10-02 15:46) @project(Now)
   ✔ Parse downloaded txns @done(18-10-02 15:46) @project(Now)
   ✔ Better yet remove duplicates while processing downloaded txns @done(18-10-02 15:46) @project(Now)
   ✔ Put FITID into generated journal @done(18-10-02 16:10) @project(Now)
-  ✔ Parse FITID from journal @done(18-10-02 16:25) @project(Now)
-  ✔ Stream-processing of journal @done(18-10-01 10:25)
   ✔ Aggregate journal txns into bag of hashes and set of TIDs @done(18-10-01 10:25)
   ✔ Calculate txn hash on-demand @done(18-10-01 10:25)
   ✔ Get rid of parser.data @done(18-09-30 18:38) @project(Internal Improvements)

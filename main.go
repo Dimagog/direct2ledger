@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -50,7 +51,6 @@ var (
 	dateFormat   = flag.String("d", "1/2/2006", "Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
 	skip         = flag.Int("s", 1, "Number of header lines in CSV to skip")
 	inverseSign  = flag.Bool("inverseSign", false, "Inverse sign of transaction amounts in CSV.")
-	reverseCSV   = flag.Bool("reverseCSV", false, "Reverse order of transactions in CSV")
 	allowDups    = flag.Bool("allowDups", false, "Don't filter out duplicate transactions")
 	allowPending = flag.Bool("allowPending", false, "Don't filter out pending transactions (pending detection heuristic may not always work)")
 	tfidf        = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian (works better for small ledgers, when you are just starting)")
@@ -83,6 +83,13 @@ type bank struct {
 	Username string
 	ClientID string
 	Accounts []account
+}
+
+func (b *bank) getName() string {
+	if b.Name != "" {
+		return b.Name
+	}
+	return b.Org
 }
 
 type account struct {
@@ -209,7 +216,6 @@ func assertf(ok bool, format string, args ...interface{}) {
 
 type parser struct {
 	db       *bolt.DB
-	txns     []txn
 	classes  []bayesian.Class
 	cl       *bayesian.Classifier
 	accounts []string
@@ -517,6 +523,10 @@ func parseDescription(col string) (string, bool) {
 }
 
 func (p *parser) downloadAndParseBankAccount(bank *bank, acc *account, tch chan<- *txn) {
+	if *debug {
+		fmt.Printf("Downloading %s -> %s\n", bank.getName(), acc.Name)
+	}
+
 	// resp := readOFX("test.ofx")
 	resp := downloadOFX(bank, acc)
 
@@ -554,17 +564,30 @@ func (p *parser) downloadAndParseBankAccount(bank *bank, acc *account, tch chan<
 			tch <- t
 		}
 	}
+
+	if *debug {
+		fmt.Printf("Finished downloading %s -> %s\n", bank.getName(), acc.Name)
+	}
 }
 
 func (p *parser) downloadAndParseNewTransactions(tch chan<- *txn) {
+	var allDone sync.WaitGroup
 	for iBank := range config.Banks {
 		bank := &config.Banks[iBank]
 		for iAcc := range bank.Accounts {
 			acc := &bank.Accounts[iAcc]
-			p.downloadAndParseBankAccount(bank, acc, tch)
+			allDone.Add(1)
+			go func() {
+				p.downloadAndParseBankAccount(bank, acc, tch)
+				allDone.Done()
+			}()
 		}
 	}
-	close(tch)
+
+	go func() {
+		allDone.Wait()
+		close(tch)
+	}()
 }
 
 var descGarbage = regexp.MustCompile(`^((Ext Credit Card (Credit|Debit))|(Descriptive )?Withdrawal)(--)?`)
@@ -972,48 +995,22 @@ func sanitize(a string) string {
 	}, a)
 }
 
-func (p *parser) removeDuplicates(txns []txn) []txn {
-	if len(txns) == 0 {
-		return txns
-	}
-
-	sort.Stable(byTime(txns))
-	if *allowDups {
-		return txns
-	}
-
-	sort.Sort(byTime(p.txns))
-
-	prev := p.txns
-	first := txns[0].Date.Add(-24 * time.Hour)
-	for i, t := range p.txns {
-		if t.Date.After(first) {
-			prev = p.txns[i:]
-			break
+func (p *parser) removeDuplicates(tch <-chan *txn) []txn {
+	txns := make([]txn, 0, 100)
+	dupsFound := 0
+	for t := range tch {
+		hash := t.Hash()
+		if !*allowDups && p.knownTxns[*hash] > 0 {
+			dupsFound++
+			p.knownTxns[*hash]--
+			printSummary(t, 0, 0)
+		} else {
+			txns = append(txns, *t)
 		}
 	}
 
-	final := txns[:0]
-	for _, t := range txns {
-		var found bool
-		tdesc := sanitize(t.BankDesc)
-		for _, pr := range prev {
-			if pr.Date.After(t.Date) {
-				break
-			}
-			pdesc := sanitize(pr.BankDesc)
-			if tdesc == pdesc && pr.Date.Equal(t.Date) && math.Abs(pr.Amount) == math.Abs(t.Amount) {
-				printSummary(&t, 0, 0)
-				found = true
-				break
-			}
-		}
-		if !found {
-			final = append(final, t)
-		}
-	}
-	fmt.Printf("\t%d duplicates found and ignored.\n\n", len(txns)-len(final))
-	return final
+	fmt.Printf("\t%d non-FITID duplicates found and ignored.\n\n", dupsFound)
+	return txns
 }
 
 var errc = color.New(color.BgRed, color.FgWhite).PrintfFunc()
@@ -1097,19 +1094,12 @@ func main() {
 	tch = make(chan *txn, 100)
 	p.downloadAndParseNewTransactions(tch)
 
-	txns := make([]txn, 0, 100)
-	for t := range tch {
-		txns = append(txns, *t)
-	}
-
-	if *reverseCSV {
-		reverseSlice(txns)
-	}
-
-	txns = p.removeDuplicates(txns)
+	txns := p.removeDuplicates(tch)
 	if len(txns) == 0 {
 		return
 	}
+
+	sort.Stable(byTime(txns))
 
 	p.showAndCategorizeTxns(txns)
 
@@ -1191,14 +1181,6 @@ func (p *parser) parseBankTransaction(acc *account, defCurrency ofxgo.CurrSymbol
 	assertf(t.Amount != 0.0, "Zero amount for %+v", tran)
 
 	t.setKnownAccount(acc.Name)
-
-	{
-		hash := t.Hash()
-		if p.knownTxns[*hash] > 0 {
-			p.knownTxns[*hash]--
-			return nil
-		}
-	}
 
 	// check if it was reconciled before (in case we are restarted after a crash)
 	p.db.View(func(tx *bolt.Tx) error {
