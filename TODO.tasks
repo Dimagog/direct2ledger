@@ -1,9 +1,10 @@
 Now:
+  ☐ Download txns in parallel
+
+Soon:
   ☐ Fix `removeDuplicates`
     ☐ Print duplicate txns (only non-FITID-detected duplicates)
   ☐ Control startDate or how many days back to download (we know latest date for FITID-assigned transaction for each account)
-
-Soon:
   ☐ Change `[]txn` to `[]*txn`
   ☐ Automatically detect how many days to download
   ☐ Only store TIDs of txns within downloaded date range (with some slack)
@@ -12,7 +13,6 @@ Soon:
   ☐ Sort txns by the following tuple: (date, account, FITID)
 
 Later:
-  ☐ Download txns in parallel
   ☐ Compare bank-reported and ledger balances
   ☐ Generalize description cleanup
   ☐ Proper implementation for reading OFX from file

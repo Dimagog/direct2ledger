@@ -516,51 +516,55 @@ func parseDescription(col string) (string, bool) {
 	}, col), true
 }
 
-func (p *parser) downloadAndParseNewTransactions() []txn {
-	result := make([]txn, 0, 100)
+func (p *parser) downloadAndParseBankAccount(bank *bank, acc *account, tch chan<- *txn) {
+	// resp := readOFX("test.ofx")
+	resp := downloadOFX(bank, acc)
 
-	for _, bank := range config.Banks {
-		for _, acc := range bank.Accounts {
-			// resp := readOFX("test.ofx")
-			resp := downloadOFX(&bank, &acc)
+	meaning, _ := resp.Signon.Status.CodeMeaning()
+	assertf(resp.Signon.Status.Code == 0, "Signon failed: %s", meaning)
 
-			meaning, _ := resp.Signon.Status.CodeMeaning()
-			assertf(resp.Signon.Status.Code == 0, "Signon failed: %s", meaning)
+	var (
+		balanceAmount   ofxgo.Amount
+		defaultCurrency ofxgo.CurrSymbol
+		statementDate   ofxgo.Date
+		transactions    []ofxgo.Transaction
+	)
 
-			var (
-				balanceAmount   ofxgo.Amount
-				defaultCurrency ofxgo.CurrSymbol
-				statementDate   ofxgo.Date
-				transactions    []ofxgo.Transaction
-			)
-
-			if len(resp.Bank) > 0 {
-				if stmt, ok := resp.Bank[0].(*ofxgo.StatementResponse); ok {
-					balanceAmount = stmt.BalAmt
-					defaultCurrency = stmt.CurDef
-					statementDate = stmt.DtAsOf
-					transactions = stmt.BankTranList.Transactions
-				}
-			} else if len(resp.CreditCard) > 0 {
-				if stmt, ok := resp.CreditCard[0].(*ofxgo.CCStatementResponse); ok {
-					balanceAmount = stmt.BalAmt
-					defaultCurrency = stmt.CurDef
-					statementDate = stmt.DtAsOf
-					transactions = stmt.BankTranList.Transactions
-				}
-			} else {
-				assertf(false, "No messages received")
-			}
-			fmt.Printf("Balance for %s: %s %s (as of %s)\n", acc.Name, balanceAmount, defaultCurrency, statementDate)
-			for _, tran := range transactions {
-				t := p.parseBankTransaction(acc, defaultCurrency, &tran)
-				if t != nil {
-					result = append(result, *t)
-				}
-			}
+	if len(resp.Bank) > 0 {
+		if stmt, ok := resp.Bank[0].(*ofxgo.StatementResponse); ok {
+			balanceAmount = stmt.BalAmt
+			defaultCurrency = stmt.CurDef
+			statementDate = stmt.DtAsOf
+			transactions = stmt.BankTranList.Transactions
+		}
+	} else if len(resp.CreditCard) > 0 {
+		if stmt, ok := resp.CreditCard[0].(*ofxgo.CCStatementResponse); ok {
+			balanceAmount = stmt.BalAmt
+			defaultCurrency = stmt.CurDef
+			statementDate = stmt.DtAsOf
+			transactions = stmt.BankTranList.Transactions
+		}
+	} else {
+		assertf(false, "No messages received")
+	}
+	fmt.Printf("Balance for %s: %s %s (as of %s)\n", acc.Name, balanceAmount, defaultCurrency, statementDate)
+	for _, tran := range transactions {
+		t := p.parseBankTransaction(acc, defaultCurrency, &tran)
+		if t != nil {
+			tch <- t
 		}
 	}
-	return result
+}
+
+func (p *parser) downloadAndParseNewTransactions(tch chan<- *txn) {
+	for iBank := range config.Banks {
+		bank := &config.Banks[iBank]
+		for iAcc := range bank.Accounts {
+			acc := &bank.Accounts[iAcc]
+			p.downloadAndParseBankAccount(bank, acc, tch)
+		}
+	}
+	close(tch)
 }
 
 var descGarbage = regexp.MustCompile(`^((Ext Credit Card (Credit|Debit))|(Descriptive )?Withdrawal)(--)?`)
@@ -1090,7 +1094,14 @@ func main() {
 	}
 	p.finishTraining()
 
-	txns := p.downloadAndParseNewTransactions()
+	tch = make(chan *txn, 100)
+	p.downloadAndParseNewTransactions(tch)
+
+	txns := make([]txn, 0, 100)
+	for t := range tch {
+		txns = append(txns, *t)
+	}
+
 	if *reverseCSV {
 		reverseSlice(txns)
 	}
@@ -1136,7 +1147,7 @@ func init() {
 	checkf(err, "Cannot load timezone info")
 }
 
-func (p *parser) parseBankTransaction(acc account, defCurrency ofxgo.CurrSymbol, tran *ofxgo.Transaction) *txn {
+func (p *parser) parseBankTransaction(acc *account, defCurrency ofxgo.CurrSymbol, tran *ofxgo.Transaction) *txn {
 	amount, _ := tran.TrnAmt.Float64()
 	if amount == 0 {
 		// Discover reports some bogus 0-amount txns
