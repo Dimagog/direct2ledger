@@ -2,10 +2,13 @@ package main
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/howeyc/gopass"
-	keyring "github.com/zalando/go-keyring"
+	"github.com/zalando/go-keyring"
 )
+
+var exclusiveOp sync.Mutex
 
 func getPassword(bank *bank) string {
 	bankName := bank.Name
@@ -16,11 +19,16 @@ func getPassword(bank *bank) string {
 	key := fmt.Sprintf("%s@%s (%d)", bank.Username, bankName, bank.FID)
 	pwd, err := keyring.Get("direct2ledger", key)
 	if err != nil {
-		pwd = inputPassword(key)
-		err = keyring.Set("direct2ledger", key, pwd)
-		// Saving password is best-effort
+		exclusiveOp.Lock()
+		defer exclusiveOp.Unlock()
+		pwd, err = keyring.Get("direct2ledger", key)
 		if err != nil {
-			fmt.Printf("FYI: Cannot save password: %s\n", err.Error())
+			pwd = inputPassword(key)
+			err = keyring.Set("direct2ledger", key, pwd)
+			// Saving password is best-effort
+			if err != nil {
+				fmt.Printf("FYI: Cannot save password: %s\n", err.Error())
+			}
 		}
 	}
 	return pwd
