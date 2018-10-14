@@ -186,7 +186,7 @@ func (t *txn) setPairAccount(pair string) {
 	}
 }
 
-type byTime []txn
+type byTime []*txn
 
 func (b byTime) Len() int               { return len(b) }
 func (b byTime) Less(i int, j int) bool { return b[i].Date.Before(b[j].Date) }
@@ -673,7 +673,7 @@ func clear() {
 	fmt.Println()
 }
 
-func (p *parser) writeToDB(t txn) {
+func (p *parser) writeToDB(t *txn) {
 	if err := p.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
 		var val bytes.Buffer
@@ -719,7 +719,7 @@ func (p *parser) printAndGetResult(hits []bayesian.Class, t *txn) int {
 
 		if ch == 0 && key == keyboard.KeyEnter && len(t.To) > 0 && len(t.From) > 0 {
 			t.Done = true
-			p.writeToDB(*t)
+			p.writeToDB(t)
 			return 1
 		}
 
@@ -807,10 +807,9 @@ func (p *parser) printTxn(t *txn, idx, total int) int {
 	return res
 }
 
-func (p *parser) showAndCategorizeTxns(txns []txn) {
+func (p *parser) showAndCategorizeTxns(txns []*txn) {
 	for {
-		for i := 0; i < len(txns); i++ {
-			t := &txns[i]
+		for i, t := range txns {
 			if !t.Done {
 				hits := p.topHits(t)
 				t.setPairAccount(string(hits[0]))
@@ -840,14 +839,13 @@ func (p *parser) showAndCategorizeTxns(txns []txn) {
 			continue
 		}
 
-		for i := 0; i < len(txns) && i >= 0; {
-			t := &txns[i]
+		for i, t := range txns {
 			i += p.printTxn(t, i, len(txns))
 		}
 	}
 }
 
-func ledgerFormat(out io.Writer, t txn) error {
+func ledgerFormat(out io.Writer, t *txn) error {
 	_, err := fmt.Fprintf(out, "%s %s\n", t.Date.Format(stamp), t.BankDesc)
 	if err != nil {
 		return err
@@ -886,8 +884,8 @@ func ledgerFormat(out io.Writer, t txn) error {
 	return err
 }
 
-func (p *parser) removeDuplicates(tch <-chan *txn) []txn {
-	txns := make([]txn, 0, 100)
+func (p *parser) removeDuplicates(tch <-chan *txn) []*txn {
+	txns := make([]*txn, 0, 100)
 	dupsFound := 0
 	for t := range tch {
 		hash := t.Hash()
@@ -896,7 +894,7 @@ func (p *parser) removeDuplicates(tch <-chan *txn) []txn {
 			p.knownTxns[*hash]--
 			printSummary(t, 0, 0)
 		} else {
-			txns = append(txns, *t)
+			txns = append(txns, t)
 		}
 	}
 

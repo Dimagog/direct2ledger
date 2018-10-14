@@ -1,14 +1,11 @@
 Now:
+  ☐ Compare bank-reported and ledger balances
 
 Soon:
-  ☐ Compare bank-reported and ledger balances
   ☐ Control startDate or how many days back to download by default and overlap
   ☐ Only store TIDs of txns within downloaded date range (with some slack)
   ☐ Switch back to official `ofxgo`
   ☐ Sort txns by the following tuple: (date, account, FITID)
-
-Cleanup:
-  ☐ Change `[]txn` to `[]*txn`
 
 Later:
   ☐ Generalize description cleanup
@@ -16,6 +13,7 @@ Later:
   ☐ Storing amounts as `float` is imprecise
 
 Archive:
+  ✔ Change `[]txn` to `[]*txn` @done(18-10-13 19:56) @project(Cleanup)
   ✔ Remove unused funcs and vars @done(18-10-13 19:35) @project(Cleanup)
   ✔ Remove Mint-related fields @done(18-10-13 19:35) @project(Cleanup)
   ✔ Remove var loc *time.Location @done(18-10-13 19:36) @project(Cleanup)
