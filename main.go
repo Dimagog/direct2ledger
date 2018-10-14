@@ -62,6 +62,7 @@ var (
 
 type accountInfo struct {
 	latestTxnWithFITID time.Time
+	balance            amountInCurr
 }
 
 type appConfig struct {
@@ -518,7 +519,13 @@ func (p *parser) downloadAndParseBankAccount(bank *bank, acc *account, tch chan<
 	} else {
 		assertf(false, "No messages received")
 	}
-	fmt.Printf("Balance for %s: %s %s (as of %s)\n", acc.Name, balanceAmount, defaultCurrency, statementDate)
+
+	if *debug {
+		fmt.Printf("Balance for %s: %s %s (as of %s)\n", acc.Name, balanceAmount, defaultCurrency, statementDate)
+	}
+	amount, _ := balanceAmount.Float64()
+	accountsInfo[acc.Name].balance = amountInCurr{amount, translateCurrency(defaultCurrency.String())}
+
 	for _, tran := range transactions {
 		t := p.parseBankTransaction(acc, defaultCurrency, &tran)
 		if t != nil {
@@ -985,6 +992,8 @@ func main() {
 	tch = make(chan *txn, 100)
 	p.downloadAndParseNewTransactions(tch)
 
+	defer checkBalances()
+
 	txns := p.removeDuplicates(tch)
 	if len(txns) == 0 {
 		return
@@ -1005,6 +1014,70 @@ func main() {
 		}
 	}
 	checkf(of.Close(), "Unable to close output file: %v", of.Name())
+}
+
+type amountInCurr struct {
+	amount float64
+	curr   string
+}
+
+func (a *amountInCurr) String() string {
+	return fmt.Sprintf("%.2f %s", a.amount, a.curr)
+}
+
+func checkBalances() {
+	fmt.Println("Checking balances ...")
+	ledBals := getLedgerBalances()
+	mismatch := false
+	for acc, info := range accountsInfo {
+		ledBal := ledBals[acc]
+		bankBal := info.balance
+		if bankBal != ledBal {
+			color.New(color.BgRed, color.FgWhite).Printf(
+				" %s journal balance of %s does not match bank-reported %s \n", acc, ledBal.String(), bankBal.String())
+			mismatch = true
+		} else {
+			fmt.Printf(" %s balance of %s matches bank-reported amount\n", acc, ledBal.String())
+		}
+	}
+
+	if !mismatch {
+		color.New(color.BgGreen, color.FgBlack).Println(" All balances match! ")
+	}
+}
+
+func getLedgerBalances() map[string]amountInCurr {
+	const errText = "Unable to get accounts balances from journal. Possibly an issue with your ledger installation."
+
+	bals := make(map[string]amountInCurr)
+	params := []string{"-f", ledgerFile, "balance", "--flat", "--empty", "--no-total", "--format", `%a\\t%(quantity(amount))\\t%(commodity(amount))\\n`}
+	for acc := range accountsInfo {
+		params = append(params, fmt.Sprintf("^%s$", acc))
+	}
+	cmd := exec.Command("ledger", params...)
+	out, err := cmd.StdoutPipe()
+	checkf(err, errText)
+
+	err = cmd.Start()
+	checkf(err, errText)
+
+	s := bufio.NewScanner(out)
+	for s.Scan() {
+		txt := s.Text()
+
+		entry := strings.Split(txt, "\t")
+		assertf(len(entry) == 3, "Cannot parse balance %s", txt)
+		acc := entry[0]
+		bal, err := strconv.ParseFloat(strings.Replace(entry[1], ",", "", -1), 64)
+		checkf(err, "Cannot parse amount in %s", entry[1])
+		bals[acc] = amountInCurr{bal, entry[2]}
+	}
+
+	// fmt.Printf("Bals:\n%+v\n", bals)
+
+	err = cmd.Wait()
+	checkf(err, errText)
+	return bals
 }
 
 func translateCurrency(cur string) string {

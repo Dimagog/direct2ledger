@@ -1,5 +1,4 @@
 Now:
-  ☐ Compare bank-reported and ledger balances
 
 Soon:
   ☐ Control startDate or how many days back to download by default and overlap
@@ -13,6 +12,7 @@ Later:
   ☐ Storing amounts as `float` is imprecise
 
 Archive:
+  ✔ Compare bank-reported and ledger balances @done(18-10-14 14:40) @project(Now)
   ✔ Change `[]txn` to `[]*txn` @done(18-10-13 19:56) @project(Cleanup)
   ✔ Remove unused funcs and vars @done(18-10-13 19:35) @project(Cleanup)
   ✔ Remove Mint-related fields @done(18-10-13 19:35) @project(Cleanup)
