@@ -67,8 +67,13 @@ var (
 	descLength = 40
 	catLength  = 20
 
-	config appConfig
+	config       appConfig
+	accountsInfo = make(map[string]*accountInfo)
 )
+
+type accountInfo struct {
+	latestTxnWithFITID time.Time
+}
 
 type appConfig struct {
 	Banks []bank
@@ -209,8 +214,7 @@ func checkf(err error, format string, args ...interface{}) {
 
 func assertf(ok bool, format string, args ...interface{}) {
 	if !ok {
-		log.Printf(format, args...)
-		log.Fatalf("%+v", errors.Errorf("Should be true, but is false"))
+		log.Fatalf(format, args...)
 	}
 }
 
@@ -339,6 +343,12 @@ func (p *parser) train(t *txn) {
 	if t.FITID != "" {
 		tid := formatTid(t.To, t.FITID)
 		p.knownTIDs[tid] = true
+
+		accInfo := accountsInfo[t.To]
+		latestDate := accInfo.latestTxnWithFITID
+		if t.Date.After(latestDate) {
+			accInfo.latestTxnWithFITID = t.Date
+		}
 	}
 }
 
@@ -1060,6 +1070,17 @@ func main() {
 		dec := yaml.NewDecoder(f)
 		err = dec.Decode(&config)
 		checkf(err, "Cannot read accounts")
+
+		for iBank := range config.Banks {
+			bank := &config.Banks[iBank]
+			for iAcc := range bank.Accounts {
+				acc := &bank.Accounts[iAcc]
+
+				_, alreadyPresent := accountsInfo[acc.Name]
+				assertf(!alreadyPresent, "Duplicate account name %s", acc.Name)
+				accountsInfo[acc.Name] = &accountInfo{}
+			}
+		}
 	}
 
 	tf := path.Join(os.TempDir(), "ledger-csv-txns")

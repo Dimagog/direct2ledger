@@ -1,21 +1,25 @@
 Now:
 
 Soon:
-  ☐ Control startDate or how many days back to download (we know latest date for FITID-assigned transaction for each account)
-  ☐ Change `[]txn` to `[]*txn`
-  ☐ Automatically detect how many days to download
+  ☐ Compare bank-reported and ledger balances
+  ☐ Control startDate or how many days back to download by default and overlap
   ☐ Only store TIDs of txns within downloaded date range (with some slack)
   ☐ Switch back to official `ofxgo`
-  ☐ Cleanup unused command line options
   ☐ Sort txns by the following tuple: (date, account, FITID)
 
+Cleanup:
+  ☐ Remove Mint-related fields
+  ☐ Remove var loc *time.Location
+  ☐ Remove unused command line options
+  ☐ Change `[]txn` to `[]*txn`
+
 Later:
-  ☐ Compare bank-reported and ledger balances
   ☐ Generalize description cleanup
   ☐ Proper implementation for reading OFX from file
   ☐ Storing amounts as `float` is imprecise
 
 Archive:
+  ✔ Automatically detect how many days to download (we know latest date for FITID-assigned transaction for each account) @done(18-10-13 19:05) @project(Now)
   ✔ Fix `removeDuplicates` @done(18-10-11 16:00) @project(Now)
   ✔ Print duplicate txns (only non-FITID-detected duplicates) @done(18-10-11 16:00) @project(Now)
   ✔ Download txns in parallel @done(18-10-11 15:52) @project(Now)

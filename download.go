@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -61,10 +62,20 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 	uid, err := ofxgo.RandomUID()
 	checkf(err, "Error creating UID for transaction")
 
+	accInfo := accountsInfo[acc.Name]
+
 	const day = 24 * time.Hour
-	// lookBack := 30
-	// startDate := time.Now().Add(-time.Duration(lookBack) * day).Truncate(day)
-	startDate := time.Date(2018, 10, 1, 0, 0, 0, 0, time.UTC)
+	var lookBack int
+	startDate := accInfo.latestTxnWithFITID
+	if startDate.IsZero() {
+		lookBack = 30
+		startDate = time.Now().Truncate(day).UTC()
+	} else {
+		lookBack = 12
+	}
+	startDate = startDate.Add(-time.Duration(lookBack) * day)
+
+	fmt.Printf("For account '%s' requesting download start date of %v\n", acc.Name, startDate)
 	dtStart := &ofxgo.Date{Time: startDate}
 	// endDate := time.Date(2018, 10, 1, 0, 0, 0, 0, time.UTC)
 	// dtEnd := &ofxgo.Date{Time: endDate}
