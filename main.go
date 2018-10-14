@@ -31,7 +31,6 @@ import (
 	"github.com/fatih/color"
 	"github.com/jbrukh/bayesian"
 	"github.com/pkg/errors"
-
 	mathex "github.com/pkg/math"
 	yaml "gopkg.in/yaml.v2"
 )
@@ -45,22 +44,12 @@ func homeDir() string {
 }
 
 var (
-	debug        = flag.Bool("debug", false, "Print additional debug information.")
-	output       = flag.String("o", "out.ldg", "Journal file to write to.")
-	currency     = flag.String("c", "$", "Set currency.")
-	dateFormat   = flag.String("d", "1/2/2006", "Express your date format in numeric form w.r.t. Jan 02, 2006, separated by slashes (/). See: https://golang.org/pkg/time/")
-	skip         = flag.Int("s", 1, "Number of header lines in CSV to skip")
-	inverseSign  = flag.Bool("inverseSign", false, "Inverse sign of transaction amounts in CSV.")
-	allowDups    = flag.Bool("allowDups", false, "Don't filter out duplicate transactions")
-	allowPending = flag.Bool("allowPending", false, "Don't filter out pending transactions (pending detection heuristic may not always work)")
-	tfidf        = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian (works better for small ledgers, when you are just starting)")
+	debug     = flag.Bool("debug", false, "Print additional debug information.")
+	output    = flag.String("o", "out.ldg", "Journal file to write to.")
+	allowDups = flag.Bool("allowDups", false, "Don't filter out duplicate transactions")
+	tfidf     = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian (works better for small ledgers, when you are just starting)")
 
 	ledgerFile = ""
-
-	rtxn  = regexp.MustCompile(`(\d{4}/\d{2}/\d{2})[\W]*(\w.*)`)
-	rto   = regexp.MustCompile(`\W*([:\w]+)(.*)`)
-	rfrom = regexp.MustCompile(`\W*([:\w]+).*`)
-	rcur  = regexp.MustCompile(`(\d+\.\d+|\d+)`)
 
 	stamp      = "2006/01/02"
 	bucketName = []byte("txns")
@@ -108,18 +97,16 @@ type txnhash [sha256.Size]byte
 
 type txn struct {
 	// NOTE: FITIDs are not unique across FIs
-	FITID        string
-	Date         time.Time
-	BankDesc     string
-	MintDesc     string
-	MintCategory string
-	To           string
-	From         string
-	Amount       float64
-	Currency     string
-	Done         bool
-	fromJournal  bool
-	hash         *txnhash
+	FITID       string
+	Date        time.Time
+	BankDesc    string
+	To          string
+	From        string
+	Amount      float64
+	Currency    string
+	Done        bool
+	fromJournal bool
+	hash        *txnhash
 }
 
 // NOT thread-safe
@@ -339,7 +326,9 @@ func (p *parser) prepareTraining() {
 
 func (p *parser) train(t *txn) {
 	p.cl.Learn(t.getTerms(), bayesian.Class(t.To))
-	p.knownTxns[*t.Hash()]++
+	if !*allowDups {
+		p.knownTxns[*t.Hash()]++
+	}
 	if t.FITID != "" {
 		tid := formatTid(t.To, t.FITID)
 		p.knownTIDs[tid] = true
@@ -390,22 +379,6 @@ func (t *txn) getTerms() []string {
 	terms := strings.Split(desc, " ")
 
 	terms = append(terms, "BankDesc: "+desc)
-
-	desc = strings.ToUpper(t.MintDesc)
-	desc = normalizeWhitespace(desc)
-	if desc != "" {
-		moreTerms := strings.Split(desc, " ")
-		terms = append(terms, moreTerms...)
-		terms = append(terms, "MintDesc: "+desc)
-	}
-
-	cat := strings.ToUpper(t.MintCategory)
-	cat = normalizeWhitespace(cat)
-	if cat != "" {
-		moreTerms := strings.Split(cat, " ")
-		terms = append(terms, moreTerms...)
-		terms = append(terms, "MintCategory: "+cat)
-	}
 
 	var amt float64
 	if t.isFromJournal() {
@@ -508,28 +481,6 @@ func (p *parser) topHits(t *txn) []bayesian.Class {
 		last = pr.score
 	}
 	return result
-}
-
-func parseDate(col string) (time.Time, bool) {
-	tm, err := time.Parse(*dateFormat, col)
-	if err == nil {
-		return tm, true
-	}
-	return time.Time{}, false
-}
-
-func parseAmount(col string) (float64, bool) {
-	f, err := strconv.ParseFloat(col, 64)
-	return f, err == nil
-}
-
-func parseDescription(col string) (string, bool) {
-	return strings.Map(func(r rune) rune {
-		if r == '"' {
-			return -1
-		}
-		return r
-	}, col), true
 }
 
 func (p *parser) downloadAndParseBankAccount(bank *bank, acc *account, tch chan<- *txn) {
@@ -655,36 +606,6 @@ outer:
 		return origDesc[j:]
 	}
 	return origDesc // no deduping
-}
-
-func assignFor(opt string, cl bayesian.Class, keys map[rune]string) bool {
-	for i := 0; i < len(opt); i++ {
-		ch := rune(opt[i])
-		if _, has := keys[ch]; !has {
-			keys[ch] = string(cl)
-			return true
-		}
-	}
-	return false
-}
-
-type kv struct {
-	key rune
-	val string
-}
-
-type byVal []kv
-
-func (b byVal) Len() int {
-	return len(b)
-}
-
-func (b byVal) Less(i int, j int) bool {
-	return b[i].val < b[j].val
-}
-
-func (b byVal) Swap(i int, j int) {
-	b[i], b[j] = b[j], b[i]
 }
 
 func printCategory(t *txn) {
@@ -860,18 +781,6 @@ func (p *parser) printTxn(t *txn, idx, total int) int {
 		color.New(color.BgWhite, color.FgBlack).Printf("%6s %s ", "[DESC]", t.BankDesc) // descLength used in Printf.
 		fmt.Println()
 	}
-	needNewLine := false
-	if len(t.MintDesc) > 0 {
-		color.New(color.BgCyan, color.FgBlack).Printf("%6s %s ", "[MINT]", t.MintDesc)
-		needNewLine = true
-	}
-	if len(t.MintCategory) > 0 {
-		color.New(color.BgCyan, color.FgBlack).Printf("%6s %s ", "[CAT]", t.MintCategory)
-		needNewLine = true
-	}
-	if needNewLine {
-		fmt.Println()
-	}
 	{
 		prefix, cat := t.getPairAccount2()
 		if len(cat) > catLength {
@@ -977,34 +886,6 @@ func ledgerFormat(out io.Writer, t txn) error {
 	return err
 }
 
-func sanitize(a string) string {
-	return strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' {
-			return r
-		}
-		if r >= 'A' && r <= 'Z' {
-			return r
-		}
-		if r >= '0' && r <= '9' {
-			return r
-		}
-		switch r {
-		case '*':
-			fallthrough
-		case ':':
-			fallthrough
-		case '/':
-			fallthrough
-		case '.':
-			fallthrough
-		case '-':
-			return r
-		default:
-			return -1
-		}
-	}, a)
-}
-
 func (p *parser) removeDuplicates(tch <-chan *txn) []txn {
 	txns := make([]txn, 0, 100)
 	dupsFound := 0
@@ -1023,14 +904,11 @@ func (p *parser) removeDuplicates(tch <-chan *txn) []txn {
 	return txns
 }
 
-var errc = color.New(color.BgRed, color.FgWhite).PrintfFunc()
-
 func usage() {
 	fmt.Println("\nUsage:\n" +
-		"\tdirect2ledger [options] <ledger-file> <csv-file>\n\n" +
+		"\tdirect2ledger [options] <ledger-file>\n\n" +
 		"  where:\n" +
-		"\t<ledger-file> is an existing Ledger file to learn from\n" +
-		"\t<csv-file>    is a CSV file containing new transactions import\n\n" +
+		"\t<ledger-file> is an existing Ledger file to learn from\n\n" +
 		"Options:")
 	flag.PrintDefaults()
 	fmt.Println()
@@ -1040,12 +918,6 @@ func usage() {
 func usageMsg(msg string) {
 	fmt.Fprintln(os.Stderr, msg)
 	usage()
-}
-
-func reverseSlice(s []txn) {
-	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
-		s[i], s[j] = s[j], s[i]
-	}
 }
 
 func main() {
@@ -1150,14 +1022,6 @@ func formatTid(account, FITID string) string {
 	return fmt.Sprintf("%s\n%s", account, FITID)
 }
 
-var loc *time.Location
-
-func init() {
-	var err error
-	loc, err = time.LoadLocation("US/Pacific")
-	checkf(err, "Cannot load timezone info")
-}
-
 func (p *parser) parseBankTransaction(acc *account, defCurrency ofxgo.CurrSymbol, tran *ofxgo.Transaction) *txn {
 	amount, _ := tran.TrnAmt.Float64()
 	if amount == 0 {
@@ -1177,6 +1041,9 @@ func (p *parser) parseBankTransaction(acc *account, defCurrency ofxgo.CurrSymbol
 
 	t := txn{fromJournal: false, FITID: tran.FiTID.String()}
 
+	t.Amount = amount
+	assertf(t.Amount != 0.0, "Zero amount for %+v", tran)
+
 	{
 		cur := defCurrency
 		if _, err := tran.Currency.CurSym.Valid(); err == nil {
@@ -1194,12 +1061,6 @@ func (p *parser) parseBankTransaction(acc *account, defCurrency ofxgo.CurrSymbol
 
 	t.BankDesc = extractDescription(tran)
 	assertf(len(t.BankDesc) != 0, "No description for %+v", tran)
-
-	if *inverseSign {
-		amount = -amount
-	}
-	t.Amount = amount
-	assertf(t.Amount != 0.0, "Zero amount for %+v", tran)
 
 	t.setKnownAccount(acc.Name)
 

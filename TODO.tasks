@@ -8,9 +8,6 @@ Soon:
   ☐ Sort txns by the following tuple: (date, account, FITID)
 
 Cleanup:
-  ☐ Remove Mint-related fields
-  ☐ Remove var loc *time.Location
-  ☐ Remove unused command line options
   ☐ Change `[]txn` to `[]*txn`
 
 Later:
@@ -19,6 +16,10 @@ Later:
   ☐ Storing amounts as `float` is imprecise
 
 Archive:
+  ✔ Remove unused funcs and vars @done(18-10-13 19:35) @project(Cleanup)
+  ✔ Remove Mint-related fields @done(18-10-13 19:35) @project(Cleanup)
+  ✔ Remove var loc *time.Location @done(18-10-13 19:36) @project(Cleanup)
+  ✔ Remove unused command line options @done(18-10-13 19:42) @project(Cleanup)
   ✔ Automatically detect how many days to download (we know latest date for FITID-assigned transaction for each account) @done(18-10-13 19:05) @project(Now)
   ✔ Fix `removeDuplicates` @done(18-10-11 16:00) @project(Now)
   ✔ Print duplicate txns (only non-FITID-detected duplicates) @done(18-10-11 16:00) @project(Now)
