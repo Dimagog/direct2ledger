@@ -5,6 +5,7 @@ Soon:
   ☐ Only store TIDs of txns within downloaded date range (with some slack)
   ☐ Switch back to official `ofxgo`
   ☐ Sort txns by the following tuple: (date, account, FITID)
+  ☐ Add option to bypass balance verification
 
 Later:
   ☐ Generalize description cleanup
