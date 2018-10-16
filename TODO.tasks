@@ -6,6 +6,7 @@ Soon:
   ☐ Switch back to official `ofxgo`
   ☐ Sort txns by the following tuple: (date, account, FITID)
   ☐ Add option to bypass balance verification
+  ☐ Update README
 
 Later:
   ☐ Generalize description cleanup
