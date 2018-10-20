@@ -21,4 +21,4 @@ Run `direct2ledger -h` for detailed usage info.
 `go get -v -u github.com/dimagog/direct2ledger`
 
 ## Credit
-Heavily based on [into-ledger](github.com/manishrjain/into-ledger).
+Based on [mint2ledger](https://github.com/Dimagog/mint2ledger) that is heavily based on [into-ledger](github.com/manishrjain/into-ledger).
