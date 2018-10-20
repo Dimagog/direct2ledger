@@ -75,7 +75,7 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 	}
 	startDate = startDate.Add(-time.Duration(lookBack) * day)
 
-	fmt.Printf("For account '%s' requesting download start date of %v\n", acc.Name, startDate)
+	fmt.Printf("Requesting download start date of %v for account %s\n", startDate, acc.Name)
 	dtStart := &ofxgo.Date{Time: startDate}
 	// endDate := time.Date(2018, 10, 1, 0, 0, 0, 0, time.UTC)
 	// dtEnd := &ofxgo.Date{Time: endDate}

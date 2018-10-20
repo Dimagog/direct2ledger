@@ -846,7 +846,8 @@ func (p *parser) showAndCategorizeTxns(txns []*txn) {
 			continue
 		}
 
-		for i, t := range txns {
+		for i := 0; i < len(txns) && i >= 0; {
+			t := txns[i]
 			i += p.printTxn(t, i, len(txns))
 		}
 	}
