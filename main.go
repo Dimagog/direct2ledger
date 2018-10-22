@@ -30,6 +30,7 @@ import (
 	"github.com/eiannone/keyboard"
 	"github.com/fatih/color"
 	"github.com/jbrukh/bayesian"
+	"github.com/olekukonko/tablewriter"
 	"github.com/pkg/errors"
 	mathex "github.com/pkg/math"
 	yaml "gopkg.in/yaml.v2"
@@ -335,9 +336,11 @@ func (p *parser) train(t *txn) {
 		p.knownTIDs[tid] = true
 
 		accInfo := accountsInfo[t.To]
-		latestDate := accInfo.latestTxnWithFITID
-		if t.Date.After(latestDate) {
-			accInfo.latestTxnWithFITID = t.Date
+		if accInfo != nil {
+			latestDate := accInfo.latestTxnWithFITID
+			if t.Date.After(latestDate) {
+				accInfo.latestTxnWithFITID = t.Date
+			}
 		}
 	}
 }
@@ -507,6 +510,7 @@ func (p *parser) downloadAndParseBankAccount(bank *bank, acc *account, tch chan<
 			balanceAmount = stmt.BalAmt
 			defaultCurrency = stmt.CurDef
 			statementDate = stmt.DtAsOf
+			assertf(stmt.BankTranList != nil, "No transactions received for %s", acc.Name)
 			transactions = stmt.BankTranList.Transactions
 		}
 	} else if len(resp.CreditCard) > 0 {
@@ -514,6 +518,7 @@ func (p *parser) downloadAndParseBankAccount(bank *bank, acc *account, tch chan<
 			balanceAmount = stmt.BalAmt
 			defaultCurrency = stmt.CurDef
 			statementDate = stmt.DtAsOf
+			assertf(stmt.BankTranList != nil, "No transactions received for %s", acc.Name)
 			transactions = stmt.BankTranList.Transactions
 		}
 	} else {
@@ -1030,20 +1035,31 @@ func checkBalances() {
 	fmt.Println("Checking balances ...")
 	ledBals := getLedgerBalances()
 	mismatch := false
+
+	table := tablewriter.NewWriter(color.Output)
+	table.SetHeader([]string{"Account", "Bank Balance", "Ledger Balance", "Diff"})
+	table.SetAutoFormatHeaders(false)
+	table.SetAutoWrapText(false)
+	table.SetColumnAlignment([]int{tablewriter.ALIGN_LEFT, tablewriter.ALIGN_RIGHT, tablewriter.ALIGN_RIGHT, tablewriter.ALIGN_RIGHT})
+
+	green := color.New(color.BgGreen, color.FgBlack)
+	red := color.New(color.BgRed, color.FgWhite)
+
 	for acc, info := range accountsInfo {
 		ledBal := ledBals[acc]
 		bankBal := info.balance
-		if bankBal != ledBal {
-			color.New(color.BgRed, color.FgWhite).Printf(
-				" %s journal balance of %s does not match bank-reported %s \n", acc, ledBal.String(), bankBal.String())
-			mismatch = true
+		if bankBal == ledBal {
+			table.Append([]string{acc, bankBal.String(), ledBal.String(), green.Sprint(" match ")})
 		} else {
-			fmt.Printf(" %s balance of %s matches bank-reported amount\n", acc, ledBal.String())
+			table.Append([]string{red.Sprint(acc), bankBal.String(), ledBal.String(), red.Sprintf(" %.2f ", bankBal.amount-ledBal.amount)})
+			mismatch = true
 		}
 	}
 
+	table.Render()
+
 	if !mismatch {
-		color.New(color.BgGreen, color.FgBlack).Println(" All balances match! ")
+		green.Println(" All balances match! ")
 	}
 }
 

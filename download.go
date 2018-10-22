@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"time"
@@ -54,6 +55,9 @@ func readOFX(fileName string) *ofxgo.Response {
 }
 
 func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
+	http.DefaultClient.Timeout = 20 * time.Second
+	// http.DefaultTransport.(*http.Transport).MaxConnsPerHost = 1
+
 	client, query := newRequest(bank, acc)
 
 	acctType, err := ofxgo.NewAcctType(translateAccountType(acc.Type))
@@ -109,7 +113,17 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 		log.Fatalf("Unsupported account type %s", acctType.String())
 	}
 
-	response, err := client.Request(query)
+	var response *ofxgo.Response
+	for i := 0; i <= 5; i++ {
+		if i != 0 {
+			fmt.Printf("Retry #%d downloading account %s after error: %s\n", i, acc.Name, err.Error())
+		}
+		response, err = client.Request(query)
+		if err == nil {
+			break
+		}
+	}
 	checkf(err, "Error downloading account statement for %s", acc.Name)
+	fmt.Printf("Downloaded %s\n", acc.Name)
 	return response
 }
