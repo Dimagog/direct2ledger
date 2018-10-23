@@ -45,10 +45,18 @@ func homeDir() string {
 }
 
 var (
-	debug     = flag.Bool("debug", false, "Print additional debug information.")
-	output    = flag.String("o", "out.ldg", "Journal file to write to.")
-	allowDups = flag.Bool("allowDups", false, "Don't filter out duplicate transactions")
-	tfidf     = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian (works better for small ledgers, when you are just starting)")
+	debug           = flag.Bool("debug", false, "Print additional debug information.")
+	output          = flag.String("o", "out.ldg", "Journal file to write to.")
+	allowDups       = flag.Bool("allowDups", false, "Don't filter out duplicate transactions")
+	tfidf           = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian (works better for small ledgers, when you are just starting)")
+	timeout         = flag.Duration("timeout", 20*time.Second, "Timeout while waiting for a response from bank server")
+	noBalancesCheck = flag.Bool("noBalancesCheck", false, "Disable automatic verification that downloaded bank-reported and ledger balances match.")
+	daysNew         = flag.Int("daysNew", 30,
+		"Download this many last `days` for NEW accounts ONLY.\n"+
+			"Used when there are no ledger transactions with FITID for an account and auto-calculating download start date is impossible.")
+	daysOverlap = flag.Int("daysOverlap", 12,
+		"Download this many extra `days` back on top of auto-detected start date.\n"+
+			"Most banks completely settle all transactions in 10 days, so the default of 12 days overlap should be enough.")
 
 	ledgerFile = ""
 
@@ -998,7 +1006,9 @@ func main() {
 	tch = make(chan *txn, 100)
 	p.downloadAndParseNewTransactions(tch)
 
-	defer checkBalances()
+	if !*noBalancesCheck {
+		defer checkBalances()
+	}
 
 	txns := p.removeDuplicates(tch)
 	if len(txns) == 0 {

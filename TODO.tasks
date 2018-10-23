@@ -1,20 +1,22 @@
 Now:
+  ☐ Proper implementation for reading OFX from file
 
 Soon:
-  ☐ Control startDate or how many days back to download by default and overlap
-  ☐ Only store TIDs of txns within downloaded date range (with some slack)
-  ☐ Switch back to official `ofxgo`
+  ☐ Switch back to official `ofxgo` lib
   ☐ Sort txns by the following tuple: (date, account, FITID)
-  ☐ Add option to bypass balance verification
-  ☐ Update README
+  ☐ Add instructions for initial config file creation to README
 
 Later:
-  ☐ Generalize description cleanup
-  ☐ Proper implementation for reading OFX from file
-  ☐ Storing amounts as `float` is imprecise
-  ☐ Automate bank accounts configuration
+  ☐ Automate new bank accounts configuration
+  ☐ Generalize description cleanup (make configurable per bank/account)
+  ☐ Storing amounts as `float` is imprecise, use `string` or `decimal` instead
 
 Archive:
+  ✔ Add option to bypass balance verification @done(18-10-22 17:36) @project(Now)
+  ✘ Only store TIDs of txns within downloaded date range (with some slack) @cancelled(18-10-22 17:36) @project(Soon)
+  ✔ Update README @done(18-10-22 17:36) @project(Soon)
+  ✔ Timeout switch @done(18-10-22 17:09) @project(Now)
+  ✔ Control startDate or how many days back to download by default and overlap @done(18-10-22 17:33) @project(Now)
   ✔ Format balances as a table @done(18-10-22 00:59) @project(Now)
   ✔ Retry downloads up to 5 times @done(18-10-22 00:59) @project(Now)
   ✔ Compare bank-reported and ledger balances @done(18-10-14 14:40) @project(Now)

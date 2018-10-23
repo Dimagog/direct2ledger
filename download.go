@@ -55,7 +55,7 @@ func readOFX(fileName string) *ofxgo.Response {
 }
 
 func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
-	http.DefaultClient.Timeout = 20 * time.Second
+	http.DefaultClient.Timeout = *timeout
 	// http.DefaultTransport.(*http.Transport).MaxConnsPerHost = 1
 
 	client, query := newRequest(bank, acc)
@@ -72,10 +72,10 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 	var lookBack int
 	startDate := accInfo.latestTxnWithFITID
 	if startDate.IsZero() {
-		lookBack = 30
+		lookBack = *daysNew
 		startDate = time.Now().Truncate(day).UTC()
 	} else {
-		lookBack = 12
+		lookBack = *daysOverlap
 	}
 	startDate = startDate.Add(-time.Duration(lookBack) * day)
 
