@@ -24,9 +24,9 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/aclindsa/ofxgo"
 	"github.com/boltdb/bolt"
 	"github.com/c-bata/go-prompt"
-	"github.com/dimagog/ofxgo"
 	"github.com/eiannone/keyboard"
 	"github.com/fatih/color"
 	"github.com/jbrukh/bayesian"

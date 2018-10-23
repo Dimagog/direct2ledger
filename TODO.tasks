@@ -2,7 +2,6 @@ Now:
   ☐ Proper implementation for reading OFX from file
 
 Soon:
-  ☐ Switch back to official `ofxgo` lib
   ☐ Sort txns by the following tuple: (date, account, FITID)
   ☐ Add instructions for initial config file creation to README
 
@@ -12,6 +11,7 @@ Later:
   ☐ Storing amounts as `float` is imprecise, use `string` or `decimal` instead
 
 Archive:
+  ✔ Switch back to official `ofxgo` lib @done(18-10-22 18:25) @project(Soon)
   ✔ Add option to bypass balance verification @done(18-10-22 17:36) @project(Now)
   ✘ Only store TIDs of txns within downloaded date range (with some slack) @cancelled(18-10-22 17:36) @project(Soon)
   ✔ Update README @done(18-10-22 17:36) @project(Soon)

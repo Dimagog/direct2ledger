@@ -8,14 +8,15 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/dimagog/ofxgo"
+	"github.com/aclindsa/ofxgo"
 )
 
-func newRequest(bank *bank, acc *account) (*ofxgo.Client, *ofxgo.Request) {
-	var client = ofxgo.Client{
+func newRequest(bank *bank, acc *account) (ofxgo.Client, *ofxgo.Request) {
+	basicClient := ofxgo.BasicClient{
 		AppID:  "QWIN",
 		AppVer: "2400",
 	}
+	client := ofxgo.GetClient(bank.URL, &basicClient)
 
 	var query ofxgo.Request
 	query.URL = bank.URL
@@ -33,13 +34,15 @@ func newRequest(bank *bank, acc *account) (*ofxgo.Client, *ofxgo.Request) {
 	query.Signon.Org = ofxgo.String(bank.Org)
 	query.Signon.Fid = ofxgo.String(strconv.Itoa(bank.FID))
 
-	return &client, &query
+	return client, &query
 }
 
 func translateAccountType(accType string) string {
 	switch accType {
 	case "CREDIT", "CREDITCARD":
 		return "CREDITLINE"
+	case "SAVING":
+		return "SAVINGS"
 	default:
 		return accType
 	}
