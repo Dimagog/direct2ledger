@@ -12,6 +12,7 @@ require (
 	github.com/godbus/dbus v4.1.0+incompatible // indirect
 	github.com/howeyc/gopass v0.0.0-20170109162249-bf9dde6d0d2c
 	github.com/jbrukh/bayesian v0.0.0-20161210175230-bf3f261f9a9c
+	github.com/kr/pretty v0.1.0 // indirect
 	github.com/mattn/go-colorable v0.0.9 // indirect
 	github.com/mattn/go-isatty v0.0.4 // indirect
 	github.com/mattn/go-runewidth v0.0.3 // indirect
@@ -27,5 +28,6 @@ require (
 	golang.org/x/crypto v0.0.0-20181025213731-e84da0312774 // indirect
 	golang.org/x/sys v0.0.0-20181026203630-95b1ffbd15a5 // indirect
 	golang.org/x/text v0.3.0 // indirect
+	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
 	gopkg.in/yaml.v2 v2.2.1
 )

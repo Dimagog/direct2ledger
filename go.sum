@@ -1,5 +1,3 @@
-github.com/aclindsa/ofxgo v0.1.0 h1:pyIqAguePSmlnh3vv+45/luMqASk6D0F/J5P3mfxsn8=
-github.com/aclindsa/ofxgo v0.1.0/go.mod h1:4wzVpzAGpwKjA1bK3HiwQTqrvI+bccK/X12QEqjYxok=
 github.com/aclindsa/ofxgo v0.1.1-0.20181012010830-769188113272 h1:tJeU+gENDHyCGbmhSIwqcENEraesU9k3zjqMMS/SUfw=
 github.com/aclindsa/ofxgo v0.1.1-0.20181012010830-769188113272/go.mod h1:c04JfI0NlbJOwtdVY/kyVS0OtRVDogV+FW3D2GjA8B4=
 github.com/aclindsa/xml v0.0.0-20171002130543-5d4402bb4a20/go.mod h1:DiEHtTD+e6zS3+R95F05Bfbcsfv13wZTi2M4LfAFLBE=
@@ -23,6 +21,11 @@ github.com/howeyc/gopass v0.0.0-20170109162249-bf9dde6d0d2c h1:kQWxfPIHVLbgLzphq
 github.com/howeyc/gopass v0.0.0-20170109162249-bf9dde6d0d2c/go.mod h1:lADxMC39cJJqL93Duh1xhAs4I2Zs8mKS89XWXFGp9cs=
 github.com/jbrukh/bayesian v0.0.0-20161210175230-bf3f261f9a9c h1:jqLMOnuwp+ac6nISok6EMoxpDXjQQcVIAGG8PrkX2dA=
 github.com/jbrukh/bayesian v0.0.0-20161210175230-bf3f261f9a9c/go.mod h1:SELxwZQq/mPnfPCR2mchLmT4TQaPJvYtLcCtDWSM7vM=
+github.com/kr/pretty v0.1.0 h1:L/CwN0zerZDmRFUapSPitk6f+Q3+0za1rQkzVuMiMFI=
+github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORNo=
+github.com/kr/pty v1.1.1/go.mod h1:pFQYn66WHrOpPYNljwOMqo10TkYh1fy3cYio2l3bCsQ=
+github.com/kr/text v0.1.0 h1:45sCR5RtlFHMR4UwH9sdQ5TC8v0qDQCHnXt+kaKSTVE=
+github.com/kr/text v0.1.0/go.mod h1:4Jbv+DJW3UT/LiOwJeYQe1efqtUx/iVham/4vfdArNI=
 github.com/mattn/go-colorable v0.0.9 h1:UVL0vNpWh04HeJXV0KLcaT7r06gOH2l4OW6ddYRUIY4=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=
 github.com/mattn/go-isatty v0.0.4 h1:bnP0vzxcAdeI1zdubAl5PjU6zsERjGZb7raWodagDYs=
@@ -58,5 +61,7 @@ golang.org/x/text v0.3.0 h1:g61tztE5qeGQ89tm6NTjjM9VPIm088od1l6aSorWRWg=
 golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 h1:qIbj1fsPNlZgppZ+VLlY7N33q108Sa+fhmuc+sWQYwY=
+gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v2 v2.2.1 h1:mUhvW9EsL+naU5Q3cakzfE91YhliOondGd6ZrsDBHQE=
 gopkg.in/yaml.v2 v2.2.1/go.mod h1:hI93XBmqTisBFMUTm0b8Fm+jr3Dg1NNxqwp+5A1VGuI=
