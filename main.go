@@ -198,9 +198,28 @@ func (t *txn) setPairAccount(pair string) {
 
 type byTime []*txn
 
-func (b byTime) Len() int               { return len(b) }
-func (b byTime) Less(i int, j int) bool { return b[i].Date.Before(b[j].Date) }
-func (b byTime) Swap(i int, j int)      { b[i], b[j] = b[j], b[i] }
+func (b byTime) Len() int          { return len(b) }
+func (b byTime) Swap(i int, j int) { b[i], b[j] = b[j], b[i] }
+func (b byTime) Less(i int, j int) bool {
+	if b[i].Date.Before(b[j].Date) {
+		return true
+	}
+	if b[i].Date.After(b[j].Date) {
+		return false
+	}
+
+	ai := b[i].getKnownAccount()
+	aj := b[j].getKnownAccount()
+
+	if ai < aj {
+		return true
+	}
+	if ai > aj {
+		return false
+	}
+
+	return b[i].FITID < b[j].FITID
+}
 
 func checkf(err error, format string, args ...interface{}) {
 	if err != nil {
