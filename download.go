@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aclindsa/ofxgo"
@@ -13,8 +15,9 @@ import (
 
 func newRequest(bank *bank, acc *account) (ofxgo.Client, *ofxgo.Request) {
 	basicClient := ofxgo.BasicClient{
-		AppID:  "QWIN",
-		AppVer: "2400",
+		AppID:       "QWIN",
+		AppVer:      "2400",
+		SpecVersion: ofxgo.OfxVersion211,
 	}
 	client := ofxgo.GetClient(bank.URL, &basicClient)
 
@@ -121,7 +124,18 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 		if i != 0 {
 			fmt.Printf("Retry #%d downloading account %s after error: %s\n", i, acc.Name, err.Error())
 		}
-		response, err = client.Request(query)
+		if *saveOFX {
+			var httpResponse *http.Response
+			httpResponse, err = client.RequestNoParse(query)
+			if err == nil {
+				fname := strings.Replace(acc.Name, ":", "_", -1) + ".ofx"
+				fil, _ := os.Create(fname)
+				r := io.TeeReader(httpResponse.Body, fil)
+				response, err = ofxgo.ParseResponse(r)
+			}
+		} else {
+			response, err = client.Request(query)
+		}
 		if err == nil {
 			break
 		}

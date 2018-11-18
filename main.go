@@ -47,10 +47,11 @@ func homeDir() string {
 var (
 	debug           = flag.Bool("debug", false, "Print additional debug information.")
 	output          = flag.String("o", "out.ldg", "Journal file to write to.")
-	allowDups       = flag.Bool("allowDups", false, "Don't filter out duplicate transactions")
-	tfidf           = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian (works better for small ledgers, when you are just starting)")
-	timeout         = flag.Duration("timeout", 20*time.Second, "Timeout while waiting for a response from bank server")
+	allowDups       = flag.Bool("allowDups", false, "Don't filter out duplicate transactions.")
+	tfidf           = flag.Bool("tfidf", false, "Use TF-IDF classification algorithm instead of Bayesian (works better for small ledgers, when you are just starting).")
+	timeout         = flag.Duration("timeout", 20*time.Second, "Timeout while waiting for a response from bank server.")
 	noBalancesCheck = flag.Bool("noBalancesCheck", false, "Disable automatic verification that downloaded bank-reported and ledger balances match.")
+	saveOFX         = flag.Bool("saveOFX", false, "Save downloaded OFX data to <account name>.ofx files.")
 	daysNew         = flag.Int("daysNew", 30,
 		"Download this many last `days` for NEW accounts ONLY.\n"+
 			"Used when there are no ledger transactions with FITID for an account and auto-calculating download start date is impossible.")
@@ -859,6 +860,7 @@ func (p *parser) showAndCategorizeTxns(txns []*txn) {
 
 		fmt.Printf("Found %d transactions. Review (Y/a/n/q)? ", len(txns))
 		ch, _, _ := keyboard.GetSingleKey()
+		fmt.Println()
 
 		if ch == 'q' {
 			return
