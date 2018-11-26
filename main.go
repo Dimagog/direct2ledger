@@ -52,6 +52,7 @@ var (
 	timeout         = flag.Duration("timeout", 20*time.Second, "Timeout while waiting for a response from bank server.")
 	noBalancesCheck = flag.Bool("noBalancesCheck", false, "Disable automatic verification that downloaded bank-reported and ledger balances match.")
 	saveOFX         = flag.Bool("saveOFX", false, "Save downloaded OFX data to <account name>.ofx files.")
+	noTS            = flag.Bool("noTS", false, "No timestamp comment added to output journal file.")
 	daysNew         = flag.Int("daysNew", 30,
 		"Download this many last `days` for NEW accounts ONLY.\n"+
 			"Used when there are no ledger transactions with FITID for an account and auto-calculating download start date is impossible.")
@@ -1040,8 +1041,10 @@ func main() {
 
 	p.showAndCategorizeTxns(txns)
 
-	_, err = fmt.Fprintf(of, "; direct2ledger run at %v\n\n", time.Now().Format("2006-01-02 15:04:05 MST"))
-	checkf(err, "Unable to write into output file: %v", of.Name())
+	if !*noTS {
+		_, err = fmt.Fprintf(of, "; direct2ledger run at %v\n\n", time.Now().Format("2006-01-02 15:04:05 MST"))
+		checkf(err, "Unable to write into output file: %v", of.Name())
+	}
 
 	for _, t := range txns {
 		if t.Done {
