@@ -1082,7 +1082,7 @@ func checkBalances() {
 	for acc, info := range accountsInfo {
 		ledBal := ledBals[acc]
 		bankBal := info.balance
-		if bankBal == ledBal {
+		if bankBal == ledBal || (bankBal.amount == 0 && ledBal.amount == 0) {
 			table.Append([]string{acc, bankBal.String(), ledBal.String(), green.Sprint(" match ")})
 		} else {
 			table.Append([]string{red.Sprint(acc), bankBal.String(), ledBal.String(), red.Sprintf(" %.2f ", bankBal.amount-ledBal.amount)})
