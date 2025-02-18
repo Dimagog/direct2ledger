@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -59,6 +60,7 @@ var (
 	daysOverlap = flag.Int("daysOverlap", 12,
 		"Download this many extra `days` back on top of auto-detected start date.\n"+
 			"Most banks completely settle all transactions in 10 days, so the default of 12 days overlap should be enough.")
+	month = flag.String("month", "", "Download transactions up to and including specific year-month (format: YYYY-MM)")
 
 	ledgerFile = ""
 
@@ -251,6 +253,7 @@ type parser struct {
 	// NOTE: FITIDs are not unique accross FIs,
 	// so reported FITID is prepended with account name.
 	knownTIDs map[string]bool
+	skippedFITIDs int32 // Add counter for FITID-based skips
 }
 
 func newParser(db *bolt.DB) parser {
@@ -941,6 +944,7 @@ func (p *parser) removeDuplicates(tch <-chan *txn) []*txn {
 		}
 	}
 
+	fmt.Printf("\t%d FITID duplicates found and ignored.\n", p.skippedFITIDs)
 	fmt.Printf("\t%d non-FITID duplicates found and ignored.\n\n", dupsFound)
 	return txns
 }
@@ -1157,9 +1161,6 @@ func (p *parser) parseBankTransaction(acc *account, defCurrency ofxgo.CurrSymbol
 
 	tid := formatTid(acc.Name, tran.FiTID.String())
 
-	if _, known := p.knownTIDs[tid]; known {
-		return nil
-	}
 
 	t := txn{fromJournal: false, FITID: tran.FiTID.String()}
 
@@ -1200,6 +1201,12 @@ func (p *parser) parseBankTransaction(acc *account, defCurrency ofxgo.CurrSymbol
 		}
 		return nil
 	})
+
+	if _, known := p.knownTIDs[tid]; known {
+		atomic.AddInt32(&p.skippedFITIDs, 1) // Atomic increment
+		printSummary(&t, 0, 0)
+		return nil
+	}
 
 	return &t
 }

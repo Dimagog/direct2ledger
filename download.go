@@ -85,10 +85,21 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 	}
 	startDate = startDate.Add(-time.Duration(lookBack) * day)
 
-	fmt.Printf("Requesting download start date of %v for account %s\n", startDate, acc.Name)
 	dtStart := &ofxgo.Date{Time: startDate}
-	// endDate := time.Date(2018, 10, 1, 0, 0, 0, 0, time.UTC)
-	// dtEnd := &ofxgo.Date{Time: endDate}
+
+	var dtEnd *ofxgo.Date
+	if *month != "" {
+		endDate, err := time.Parse("2006-01", *month)
+		//startDate = endDate
+		//dtStart = &ofxgo.Date{Time: startDate}
+		checkf(err, "Invalid month format %s, expected YYYY-MM", *month)
+		// first day of next month
+		endDate = endDate.AddDate(0, 1, 0)
+		dtEnd = &ofxgo.Date{Time: endDate}
+		fmt.Printf("Requesting download start date of %s and end date of %s for account %s\n", startDate.Format("2006-01-02"), endDate.Format("2006-01-02"), acc.Name)
+	} else {
+		fmt.Printf("Requesting download start date of %s for account %s\n", startDate.Format("2006-01-02"), acc.Name)
+	}
 
 	switch acctType {
 	case ofxgo.AcctTypeChecking, ofxgo.AcctTypeSavings:
@@ -100,7 +111,7 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 				AcctType: acctType,
 			},
 			DtStart: dtStart,
-			// DtEnd:   dtEnd,
+			DtEnd:   dtEnd,
 			Include: true,
 		}
 		query.Bank = append(query.Bank, &statementRequest)
@@ -111,7 +122,7 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 				AcctID: ofxgo.String(acc.AcctID),
 			},
 			DtStart: dtStart,
-			// DtEnd:   dtEnd,
+			DtEnd:   dtEnd,
 			Include: true,
 		}
 		query.CreditCard = append(query.CreditCard, &statementRequest)
@@ -126,6 +137,11 @@ func downloadOFX(bank *bank, acc *account) *ofxgo.Response {
 		}
 		if *saveOFX {
 			var httpResponse *http.Response
+			// query.SetClientFields(client)
+			// buf, err := query.Marshal()
+			// checkf(err, "Marshal failed")
+			// decodedStr := buf.String() // Decode buffer using UTF-8
+			// println(decodedStr)
 			httpResponse, err = client.RequestNoParse(query)
 			if err == nil {
 				fname := strings.Replace(acc.Name, ":", "_", -1) + ".ofx"
