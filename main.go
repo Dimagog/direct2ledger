@@ -11,12 +11,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
 	"os/user"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -252,7 +254,7 @@ type parser struct {
 	// A set of known transaction IDs (as reported by FI)
 	// NOTE: FITIDs are not unique accross FIs,
 	// so reported FITID is prepended with account name.
-	knownTIDs map[string]bool
+	knownTIDs     map[string]bool
 	skippedFITIDs int32 // Add counter for FITID-based skips
 	// map from exact transaction description to account name
 	alwaysAutoAccept map[string]string
@@ -260,10 +262,9 @@ type parser struct {
 
 func newParser(db *bolt.DB) parser {
 	return parser{
-		db:        db,
-		knownTxns: make(map[txnhash]int),
-		knownTIDs: make(map[string]bool),
-		alwaysAutoAccept: make(map[string]string),
+		db:               db,
+		knownTxns:        make(map[txnhash]int),
+		knownTIDs:        make(map[string]bool),
 	}
 }
 
@@ -322,6 +323,57 @@ func parseJournalTransactions(tch chan<- *txn) {
 
 	err = cmd.Wait()
 	checkf(err, errText)
+}
+
+const autoAcceptFile = "direct2ledger.autoaccept"
+
+func (p *parser) readAutoAccepts() {
+	p.alwaysAutoAccept = make(map[string]string)
+
+	file, err := os.Open(autoAcceptFile)
+	if err == nil {
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			parts := strings.SplitN(line, "\t", 2)
+			if len(parts) == 2 {
+				p.alwaysAutoAccept[parts[0]] = parts[1]
+			} else {
+				log.Printf("Invalid autoaccept line: %v", line)
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			log.Printf("Error reading autoaccept file: %v", err)
+		}
+	} else if !os.IsNotExist(err) {
+		log.Printf("Error opening autoaccept file: %v", err)
+	}
+}
+
+func (p *parser) writeAutoAccepts() {
+	if len(p.alwaysAutoAccept) == 0 {
+		return
+	}
+
+	file, err := os.Create(autoAcceptFile)
+	if err != nil {
+		log.Printf("Error creating autoaccept file: %v", err)
+		return
+	}
+	defer file.Close()
+
+	// Sort keys for deterministic output
+	keys := slices.Collect(maps.Keys(p.alwaysAutoAccept))
+	sort.Strings(keys)
+
+	for _, desc := range keys {
+		acc := p.alwaysAutoAccept[desc]
+		if _, err := fmt.Fprintf(file, "%s\t%s\n", desc, acc); err != nil {
+			log.Printf("Error writing autoaccept file: %v", err)
+			return
+		}
+	}
 }
 
 func (p *parser) readAccounts() {
@@ -1035,6 +1087,8 @@ func main() {
 	checkf(err, "Unable to open output file: %v", *output)
 
 	p := newParser(db)
+	p.readAutoAccepts()
+	defer p.writeAutoAccepts()
 	p.readAccounts()
 
 	tch := make(chan *txn, 100)
@@ -1178,7 +1232,6 @@ func (p *parser) parseBankTransaction(acc *account, defCurrency ofxgo.CurrSymbol
 	}
 
 	tid := formatTid(acc.Name, tran.FiTID.String())
-
 
 	t := txn{fromJournal: false, FITID: tran.FiTID.String()}
 

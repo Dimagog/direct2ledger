@@ -1,5 +1,7 @@
 module github.com/Dimagog/direct2ledger
 
+go 1.23
+
 require (
 	github.com/aclindsa/ofxgo v0.1.1-0.20181012010830-769188113272
 	github.com/aclindsa/xml v0.0.0-20181012010330-207ec7fb7420 // indirect
