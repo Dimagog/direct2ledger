@@ -254,6 +254,8 @@ type parser struct {
 	// so reported FITID is prepended with account name.
 	knownTIDs map[string]bool
 	skippedFITIDs int32 // Add counter for FITID-based skips
+	// map from exact transaction description to account name
+	alwaysAutoAccept map[string]string
 }
 
 func newParser(db *bolt.DB) parser {
@@ -261,6 +263,7 @@ func newParser(db *bolt.DB) parser {
 		db:        db,
 		knownTxns: make(map[txnhash]int),
 		knownTIDs: make(map[string]bool),
+		alwaysAutoAccept: make(map[string]string),
 	}
 }
 
@@ -749,21 +752,36 @@ func buildCompleter(accounts []bayesian.Class) prompt.Completer {
 
 func (p *parser) printAndGetResult(hits []bayesian.Class, t *txn) int {
 	for {
+		autoAccount, found := p.alwaysAutoAccept[t.BankDesc]
+		if !t.Done && t.isFromKnown() && found && autoAccount != "" {
+			color.New(color.BgGreen, color.FgBlack).Printf("Auto-accepted as: ")
+			color.New(color.BgYellow, color.FgBlack).Printf(" %s ", autoAccount)
+			fmt.Println()
+			t.setPairAccount(autoAccount)
+			t.Done = true
+			p.writeToDB(t)
+			return 1
+		}
+
 		for i, acc := range hits {
 			fmt.Printf("%2d. %s\n", (i+1)%10, acc)
 		}
 		fmt.Println()
 
-		fmt.Print("[Enter]=Accept, [space]=type in, (b)ack, (s)kip, show (a)all, (q)uit or number> ")
+		fmt.Print("[Enter]=Accept, accept (a)ll like this, [space]=type in, (b)ack, (s)kip (q)uit or number> ")
 		ch, key, _ := keyboard.GetSingleKey()
 		if unicode.IsPrint(ch) {
 			fmt.Printf("%c", ch)
 		}
 		fmt.Println()
 
-		if ch == 0 && key == keyboard.KeyEnter && len(t.To) > 0 && len(t.From) > 0 {
+		if (ch == 'a' || key == keyboard.KeyEnter) && len(t.To) > 0 && len(t.From) > 0 {
 			t.Done = true
 			p.writeToDB(t)
+			if ch == 'a' && t.isFromKnown() {
+				fmt.Println("Auto-accepting all transactions like this.")
+				p.alwaysAutoAccept[t.BankDesc] = t.To
+			}
 			return 1
 		}
 
@@ -1204,7 +1222,7 @@ func (p *parser) parseBankTransaction(acc *account, defCurrency ofxgo.CurrSymbol
 
 	if _, known := p.knownTIDs[tid]; known {
 		atomic.AddInt32(&p.skippedFITIDs, 1) // Atomic increment
-		printSummary(&t, 0, 0)
+		// printSummary(&t, 0, 0)
 		return nil
 	}
 

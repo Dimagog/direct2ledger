@@ -17,10 +17,10 @@ func getPassword(bank *bank) string {
 	}
 
 	key := fmt.Sprintf("%s@%s (%d)", bank.Username, bankName, bank.FID)
+	exclusiveOp.Lock()
+	defer exclusiveOp.Unlock()
 	pwd, err := keyring.Get("direct2ledger", key)
 	if err != nil {
-		exclusiveOp.Lock()
-		defer exclusiveOp.Unlock()
 		pwd, err = keyring.Get("direct2ledger", key)
 		if err != nil {
 			pwd = inputPassword(key)
