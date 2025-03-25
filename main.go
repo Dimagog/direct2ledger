@@ -1169,7 +1169,8 @@ func checkBalances() {
 	table.Render()
 
 	if !mismatch {
-		green.Println(" All balances match! ")
+		green.Print(" All balances match! ")
+		fmt.Println()
 	}
 }
 
