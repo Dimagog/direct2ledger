@@ -14,7 +14,7 @@ require (
 	github.com/pkg/errors v0.8.0
 	github.com/pkg/math v0.0.0-20141027224758-f2ed9e40e245
 	github.com/zalando/go-keyring v0.0.0-20180221093347-6d81c293b3fb
-	gopkg.in/yaml.v2 v2.2.1
+	gopkg.in/yaml.v2 v2.2.8
 )
 
 require (
